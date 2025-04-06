@@ -1,0 +1,1 @@
+#App configuration (non-sensitive settings)
