@@ -4,7 +4,7 @@ from sqlalchemy.orm import relationship
 
 Base = declarative_base()
 
-class Product(Base):
+class product(Base):
     __tablename__ = 'products'
 
     product_id = Column(String, primary_key=True)
@@ -41,7 +41,7 @@ class Product(Base):
             f"product_name='{self.product_name}')>"
         )
 
-class Inventory(Base):
+class inventory(Base):
     __tablename__ = 'inventory'
 
     inventory_id = Column(String(100), primary_key=True, index=True)
@@ -63,7 +63,7 @@ class Inventory(Base):
     def __repr__(self):
         return f"<Inventory(id={self.inventory_id}, product_id={self.product_id})>"
 
-class Sale(Base):
+class sale(Base):
     __tablename__ = 'sales'
 
     sale_id = Column(String, primary_key=True)
