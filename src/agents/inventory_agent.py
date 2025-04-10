@@ -1,19 +1,19 @@
 import logging
 import json
 from typing import Dict, Any, List, Optional, Tuple
-
+import re
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from agents.base_agent import BaseAgent
-from models import sales, product, inventory
+from models import sale, product, inventory
 
 # Configuration du logging
 logger = logging.getLogger(__name__)
 
 class InventoryAgent(BaseAgent):
     """
-    Agent spécialisé dans la gestion de l'inventaire pharmaceutique.
+    Agent specialized in the pharmaceutical inventory management.
     """
     
     def __init__(self):
@@ -21,38 +21,52 @@ class InventoryAgent(BaseAgent):
         super().__init__()
         self.system_message = """
                 You are an assistant specializing in pharmaceutical inventory management.
-                Your task is to analyze user queries regarding inventory and convert them into SQL queries to extract relevant information from the database.
-
+                Your task is to analyze user queries regarding inventory and convert them into PostgreSQL queries.
                 Database schema:
-                - inventory : inventory_id,product_id,product_name,batch_number,current_quantity,manufacturing_date,expiry_date,warehouse_location,temperature_compliant,last_checked
-                - product :product_id,product_name,generic_name,strength_form,category,manufacturer,atc_code,storage_instructions,prescription_required,controlled_substance_class,requires_refrigeration,unit_price,min_stock_level,reorder_lead_time_days,approval_date,package_size
-                - sales : sale_id,product_id,product_name,category,sale_date,quantity,unit_price,total_value,region,is_weekend,month,year,day_of_week
-                Respond ONLY with the appropriate SQL query and don't generate other text than the sql response.
+                Tables (all lowercase):
+                - inventory: inventory_id,product_id,product_name,batch_number,current_quantity,manufacturing_date,expiry_date,warehouse,location,temperature_compliant,last_checked
+                - products: product_id,product_name,generic_name,strength_form,category,manufacturer,atc_code,storage_instructions,prescription_required,controlled_substance_class,requires_refrigeration,unit_price,min_stock_level,reorder_lead_time_days,registration_date,package_size
+                - sales: sale_id,product_id,product_name,category,sale_date,quantity,unit_price,total_value,facility_id,facility_name,facility_type,region,governorate,is_weekend,is_holiday,month,year,day_of_week,cost_per_unit,total_cost,profit
+                
+                Use PostgreSQL syntax and lowercase table names. For date operations, use CURRENT_DATE and interval '30 days'.
+                Examples:
+                    Query: "What products expire in the next 30 days?"
+                    SQL: "SELECT p.product_name, i.expiry_date FROM products p 
+                        JOIN inventory i ON p.product_id = i.product_id 
+                        WHERE i.expiry_date BETWEEN CURRENT_DATE AND CURRENT_DATE + interval '30 days';"
+                    
+                    Query: "What are the top 5 selling products?"
+                    SQL: "SELECT product_name, SUM(quantity) as total_sales 
+                        FROM sales GROUP BY product_name 
+                        ORDER BY total_sales DESC LIMIT 5;"
         """
     
     def generate_sql_query(self, query: str) -> str:
         """
         Generates an SQL query from a natural language query.
-
         Args:
         query: The natural language query
-
         Returns:
         The generated SQL query
         """
         prompt = f"""Convert the following query to SQL to retrieve the requested information from the database.
                 Use only the tables and columns mentioned in the schema.
+                Return ONLY the SQL query without any XML tags, thoughts, or explanations.
 
                 Query: "{query}"
-
-                Reply with only the SQL query, without comments or explanations.
         """
         
         response = self._get_llm_response(prompt, self.system_message)
-        sql_query = response.strip()
+        
+        # Remove any XML-like tags and their content
+        response = re.sub(r'<[^>]+>.*?</[^>]+>', '', response, flags=re.DOTALL)
+        # Remove any remaining tags
+        response = re.sub(r'<[^>]+>', '', response)
+        # Clean up extra whitespace
+        sql_query = ' '.join(response.strip().split())
         
         # basic verification 
-        if "DROP" in sql_query.upper() or "DELETE" in sql_query.upper() or "UPDATE" in sql_query.upper() or "INSERT" in sql_query.upper():
+        if any(keyword in sql_query.upper() for keyword in ['DROP', 'DELETE', 'UPDATE', 'INSERT']):
             logger.warning(f"Potentially dangerous SQL query attempt: {sql_query}")
             return "SELECT 'Unauthorized query' as message"
         
@@ -61,16 +75,12 @@ class InventoryAgent(BaseAgent):
     def execute_sql_query(self, sql_query: str, session: Session) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         """
         Executes an SQL query and returns the results.
-
-        Args:
-        sql_query: The SQL query to execute
-        session: Database session
-
-        Returns:
-        Tuple containing the list of results and any error messages
         """
         try:
+            # Start a new transaction
+            session.begin()
             
+            # Execute query
             result = session.execute(text(sql_query))
             column_names = result.keys()
             rows = []
@@ -81,9 +91,13 @@ class InventoryAgent(BaseAgent):
                     row_dict[column] = row[i]
                 rows.append(row_dict)
             
+            # Commit the transaction
+            session.commit()
             return rows, None
             
         except Exception as e:
+            # Rollback on error
+            session.rollback()
             logger.error(f"Error executing SQL query: {e}")
             return [], f"Error executing query: {e}"
     
@@ -102,7 +116,7 @@ class InventoryAgent(BaseAgent):
         
         prompt = f"""
         Here's a user query and the results returned from the database.
-        Generate a clear and concise response in French that addresses the user's query.
+        Generate a clear and concise response in english that addresses the user's query.
 
         Query: "{query}"
 
@@ -154,3 +168,4 @@ class InventoryAgent(BaseAgent):
             response["response"] = f"Sorry, an error has occurred: {error}"
         
         return response
+
