@@ -2,32 +2,50 @@
 from database import Session
 from models import Product, Inventory, Sale
 from sqlalchemy.exc import SQLAlchemyError
-# Create a session
-try:
-    session = Session()
-except SQLAlchemyError as e:
-    print(f"Database connection error: {e}")
-    exit(1)
+import sys
 
-# Check inventories
-inventories = session.query(Inventory).all()
-if inventories:
-    print(inventories[0].warehouse)
-else:
-    print("No inventories found.")
+def test_database_connection():
+    try:
+        session = Session()
+        
+        # Test Inventories
+        try:
+            inventories = session.query(Inventory).all()
+            if inventories:
+                print(f"Found {len(inventories)} inventories")
+                print(f"First warehouse: {inventories[0].warehouse}")
+            else:
+                print("No inventories found")
+        except Exception as e:
+            print(f"Error querying inventories: {e}")
 
-# Check products
-products = session.query(Product).all()
-if products:
-    print(products[0].product_name)
-else:
-    print("No products found.")
+        # Test Products
+        try:
+            products = session.query(Product).all()
+            if products:
+                print(f"Found {len(products)} products")
+                print(f"First product: {products[0].product_name}")
+            else:
+                print("No products found")
+        except Exception as e:
+            print(f"Error querying products: {e}")
 
-# Check sales
-sales = session.query(Sale).all()
-if sales:
-    # Assuming Sale has a relationship to Product
-    print(sales[0].product_name)  # Replace with sales[0].product.product_name if needed
-    print(sales[0].sale_date)
-else:
-    print("No sales found.")
+        # Test Sales
+        try:
+            sales = session.query(Sale).all()
+            if sales:
+                print(f"Found {len(sales)} sales")
+                print(f"First sale date: {sales[-1].sale_date}")
+            else:
+                print("No sales found")
+        except Exception as e:
+            print(f"Error querying sales: {e}")
+
+    except SQLAlchemyError as e:
+        print(f"Database connection error: {e}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        session.close()
+
+if __name__ == "__main__":
+    test_database_connection()
