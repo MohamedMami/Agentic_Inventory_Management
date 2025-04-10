@@ -16,6 +16,7 @@ class BaseAgent(ABC):
     def __init__(self):
         self.client = Groq(api_key=groq_api_key)
         self.model = groq_model
+        self.memory: List[Dict[str, str]] = []  # Stores conversation history
     
     def _get_llm_response(self, prompt: str, system_message: Optional[str] = None) -> str:
         """
@@ -36,6 +37,7 @@ class BaseAgent(ABC):
                 messages.append({"role": "system", "content": system_message})
             
             # adding the prompt of the user 
+            messages.extend(self.memory)
             messages.append({"role": "user", "content": prompt})
             
             # API cal
@@ -47,7 +49,11 @@ class BaseAgent(ABC):
             )
             
             # Extraction et retour de la réponse
-            return response.choices[0].message.content
+            llm_response = response.choices[0].message.content
+             # Update memory
+            self.memory.append({"role": "user", "content": prompt})
+            self.memory.append({"role": "assistant", "content": llm_response})
+            return llm_response
         
         except Exception as e:
             logger.error(f"Error calling Groq API {e}")
