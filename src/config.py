@@ -10,5 +10,5 @@ DATABASE_URL = os.getenv("database_url")
 groq_api_key = os.getenv("groq_api_key")
 groq_model = os.getenv("groq_model")
 max_tokens = 4096
-temperature = 0.7
+temperature = 1
 
