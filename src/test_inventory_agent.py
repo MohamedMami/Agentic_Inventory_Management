@@ -13,9 +13,7 @@ def test_inventory_queries():
     try:
         # Test queries
         test_queries = [
-            "What is the current stock of all products?",
-            "Show me products that expire in the next 30 days",
-            "What are the top 5 selling products?"
+            "what the generic of Ciprofloxacin 500mg Tablet?"
         ]
         
         for query in test_queries:
