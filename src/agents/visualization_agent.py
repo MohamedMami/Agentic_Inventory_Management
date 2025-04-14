@@ -3,6 +3,7 @@ Agent de visualisation pour le système de gestion d'inventaire pharmaceutique.
 """
 import logging
 import json
+import re
 from typing import Dict, Any, List, Optional, Tuple
 import plotly
 import plotly.express as px
@@ -65,9 +66,7 @@ class VisualizationAgent(BaseAgent):
         """
         Generates Python code to create a visualization from the data.
         """
-        # Store data for execution context
         self.current_data = data
-        
         data_sample = json.dumps(data[:2], ensure_ascii=False, default=str)
         
         prompt = f"""
@@ -76,30 +75,72 @@ class VisualizationAgent(BaseAgent):
         Query: "{query}"
         Sample data: {data_sample}
         
-        Use this exact format:
+        For time series data, use this format:
         df = pd.DataFrame(data)
-        fig = px.bar(df, 
-            x='column_name',
-            y='value_column',
-            title='Descriptive Title'
+        # Group by month and sum values
+        df['month'] = pd.to_datetime(df['sale_date']).dt.strftime('%Y-%m')
+        monthly_data = df.groupby('month').agg({{'quantity': 'sum'}}).reset_index()
+        
+        fig = px.line(monthly_data, 
+            x='month',
+            y='quantity',
+            title='Monthly Sales Trends'
         )
         fig.update_layout(
-            xaxis_title='X Axis Label',
-            yaxis_title='Y Axis Label'
+            xaxis_title='Month',
+            yaxis_title='Total Quantity'
+        )
+        
+        For aggregated data, use this format:
+        df = pd.DataFrame(data)
+        agg_df = df.groupby(['category']).agg({{'quantity': 'sum'}}).reset_index()
+        fig = px.bar(agg_df,
+            x='category',
+            y='quantity',
+            title='Total Quantity by Category'
         )
         
         The code must:
-        1. Use the 'data' variable that's already available
-        2. Create a pandas DataFrame
-        3. Use plotly.express for visualization
-        4. Include proper title and labels
-        5. No string literals should be left unterminated
+        1. Handle proper date grouping for time series
+        2. Use appropriate aggregation functions
+        3. Include clear labels and titles
+        4. Use plotly.express for visualization
         
-        Return only valid Python code.
+        Return only the Python code, no explanations.
         """
         
-        response = self._get_llm_response(prompt, self.system_message)
-        return response.strip()
+        raw_response = self._get_llm_response(prompt, self.system_message)
+        
+        # Clean up the code
+        cleaned_code = re.sub(r'<think>.*?</think>', '', raw_response, flags=re.DOTALL)
+        cleaned_code = re.sub(r'```.*?\n', '', cleaned_code)  # Remove opening ```
+        cleaned_code = re.sub(r'\n```$', '', cleaned_code)    # Remove closing ```
+        
+        # Find the first import statement
+        import_match = re.search(r'(?:import|from)\s+\w+', cleaned_code)
+        if import_match:
+            cleaned_code = cleaned_code[import_match.start():]
+        
+        # Clean up whitespace and ensure proper ending
+        cleaned_code = cleaned_code.strip()
+        if cleaned_code.endswith('```'):
+            cleaned_code = cleaned_code[:-3].strip()
+        
+        # Ensure code ends with proper closing parenthesis if needed
+        if '(' in cleaned_code and not cleaned_code.strip().endswith(')'):
+            cleaned_code = cleaned_code.rstrip('`').strip()
+        
+        # Add required imports
+        required_imports = [
+            'import pandas as pd',
+            'import plotly.express as px'
+        ]
+        
+        for imp in required_imports:
+            if imp not in cleaned_code:
+                cleaned_code = f"{imp}\n{cleaned_code}"
+        
+        return cleaned_code
     
     def execute_visualization_code(self, code: str, query: str) -> Tuple[str, Optional[str]]:
         """
@@ -211,7 +252,7 @@ class VisualizationAgent(BaseAgent):
         
         # Generating the visualization code
         viz_code = self.generate_visualization_code(query, data)
-        logger.info(f"Code de visualisation généré: {viz_code[:100]}...")
+        logger.info(f"visualisation code generated: {viz_code[:100]}...")
         
         # excuting the visualization code
         viz_path, error = self.execute_visualization_code(viz_code, query)
