@@ -3,6 +3,7 @@ Agent de visualisation pour le système de gestion d'inventaire pharmaceutique.
 """
 import logging
 import json
+import numpy as np
 import re
 from typing import Dict, Any, List, Optional, Tuple
 import plotly
@@ -73,7 +74,7 @@ class VisualizationAgent(BaseAgent):
         Generate Python code using Plotly to create an interactive visualization.
         
         Query: "{query}"
-        Sample data: {data_sample}
+        Sample data: {data}
         
         For time series data, use this format:
         df = pd.DataFrame(data)
@@ -106,6 +107,7 @@ class VisualizationAgent(BaseAgent):
         3. Include clear labels and titles
         4. Use plotly.express for visualization
         
+        
         Return only the Python code, no explanations.
         """
         
@@ -115,7 +117,7 @@ class VisualizationAgent(BaseAgent):
         cleaned_code = re.sub(r'<think>.*?</think>', '', raw_response, flags=re.DOTALL)
         cleaned_code = re.sub(r'```.*?\n', '', cleaned_code)  # Remove opening ```
         cleaned_code = re.sub(r'\n```$', '', cleaned_code)    # Remove closing ```
-        
+        cleaned_code = re.sub(r'\s*fig\.write_html\([^)]*\)\s*', '', cleaned_code)  # Remove fig.write_html() if present
         # Find the first import statement
         import_match = re.search(r'(?:import|from)\s+\w+', cleaned_code)
         if import_match:
@@ -151,23 +153,32 @@ class VisualizationAgent(BaseAgent):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             html_path = f"data/visualizations/viz_{timestamp}.html"
             
+            # Convert data to DataFrame if it's not already
+            if isinstance(self.current_data, list):
+                df = pd.DataFrame(self.current_data)
+            else:
+                df = pd.DataFrame([self.current_data])
+            
             # Prepare the execution environment
             namespace = {
                 'pd': pd,
                 'px': plotly.express,
                 'go': plotly.graph_objects,
-                'data': self.current_data,  # Store data as class attribute
-                'html_path': html_path
+                'data': df,  # Pass DataFrame instead of raw data
+                'html_path': html_path,
+                'np': np  # Add numpy for numerical operations
             }
             
-            # Clean up the code and ensure proper string handling
+            # Clean up the code
             code = code.strip()
-            if not code.endswith(';'):
-                code += '\n'
-                
+            
+            # Ensure DataFrame creation uses the provided data
+            if 'pd.DataFrame(data)' not in code:
+                code = f"df = pd.DataFrame(data)\n{code}"
+            
             # Add save command if not present
             if "fig.write_html(" not in code:
-                code += f"fig.write_html('{html_path}')\n"
+                code += f"\nfig.write_html('{html_path}')"
             
             # Execute the code in the prepared namespace
             exec(code, namespace)
@@ -179,7 +190,8 @@ class VisualizationAgent(BaseAgent):
                 
         except Exception as e:
             logger.error(f"Error running visualization code: {e}")
-            return "", f"Error creating visualization: {str(e)}"
+            error_msg = f"Error creating visualization: {str(e)}\nCode:\n{code}"
+            return "", error_msg
     
     def generate_visualization_description(self, query: str, data: List[Dict[str, Any]], viz_path: str) -> str:
         """
