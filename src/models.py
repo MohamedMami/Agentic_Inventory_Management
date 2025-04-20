@@ -1,11 +1,20 @@
-from sqlalchemy import Column, String, Boolean, Numeric, Integer, Date, ForeignKey, DateTime
+from sqlalchemy import (
+    Column,
+    String,
+    Boolean,
+    Numeric,
+    Integer,
+    Date,
+    ForeignKey,
+    DateTime,
+)
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
 Base = declarative_base()
 
-class product(Base):
-    __tablename__ = 'products'
+class Product(Base):
+    __tablename__ = "products"
 
     product_id = Column(String, primary_key=True)
     product_name = Column(String, nullable=False)
@@ -30,45 +39,46 @@ class product(Base):
     production_capacity_units_per_day = Column(Integer)
     quality_control_sampling_rate = Column(Numeric(5, 2))
     barcode = Column(String)
-    
+
     # Relationships
-    inventories = relationship("Inventory", back_populates="product")
-    sales = relationship("Sale", back_populates="product")
+    inventories = relationship("Inventory", back_populates="product", cascade="all, delete")
+    sales = relationship("Sale", back_populates="product", cascade="all, delete")
 
     def __repr__(self):
         return (
-            f"<Product(product_id={self.product_id}, "
-            f"product_name='{self.product_name}')>"
+            f"<Product(product_id={self.product_id}, product_name='{self.product_name}')>"
         )
 
-class inventory(Base):
-    __tablename__ = 'inventory'
+
+class Inventory(Base):
+    __tablename__ = "inventory"
 
     inventory_id = Column(String(100), primary_key=True, index=True)
-    product_id = Column(String, ForeignKey("products.product_id"))
+    product_id = Column(String, ForeignKey("products.product_id"), nullable=False)
     product_name = Column(String, nullable=False)
     batch_id = Column(String(100), nullable=False)
     current_quantity = Column(Integer, nullable=False)
-    manufacturing_date = Column(Date, nullable=True)
-    expiry_date = Column(Date, nullable=True)
+    manufacturing_date = Column(Date)
+    expiry_date = Column(Date)
     warehouse = Column(String(100), nullable=False)
     location = Column(String(100), nullable=False)
-    temperature_compliant = Column(Boolean, nullable=True)
-    last_checked = Column(DateTime, nullable=True)
-    received_date = Column(Date, nullable=True)
+    temperature_compliant = Column(Boolean)
+    last_checked = Column(DateTime)
+    received_date = Column(Date)
     quarantine_status = Column(String(100), nullable=False)
-    
+
     product = relationship("Product", back_populates="inventories")
 
     def __repr__(self):
         return f"<Inventory(id={self.inventory_id}, product_id={self.product_id})>"
 
-class sale(Base):
-    __tablename__ = 'sales'
+
+class Sale(Base):
+    __tablename__ = "sales"
 
     sale_id = Column(String, primary_key=True)
     invoice_number = Column(String)
-    product_id = Column(String, ForeignKey("products.product_id"))
+    product_id = Column(String, ForeignKey("products.product_id"), nullable=False)
     product_name = Column(String)
     category = Column(String)
     sale_date = Column(Date)
@@ -88,12 +98,10 @@ class sale(Base):
     cost_per_unit = Column(Numeric(10, 2))
     total_cost = Column(Numeric(15, 2))
     profit = Column(Numeric(15, 2))
-    
+
     product = relationship("Product", back_populates="sales")
 
     def __repr__(self):
         return (
-            f"<Sale(sale_id={self.sale_id}, "
-            f"product_id={self.product_id}, "
-            f"quantity={self.quantity})>"
+            f"<Sale(sale_id={self.sale_id}, product_id={self.product_id}, quantity={self.quantity})>"
         )

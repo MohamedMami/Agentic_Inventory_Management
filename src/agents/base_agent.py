@@ -3,6 +3,8 @@ from abc import ABC, abstractmethod
 import logging
 from typing import Any, Dict, List, Optional
 
+from langchain.memory import ConversationBufferMemory  # New import
+from langchain.schema import BaseMessage 
 from groq import Groq
 from sqlalchemy.orm import Session
 
@@ -16,48 +18,53 @@ class BaseAgent(ABC):
     def __init__(self):
         self.client = Groq(api_key=groq_api_key)
         self.model = groq_model
-        self.memory: List[Dict[str, str]] = []  # Stores conversation history
+        self.memory = ConversationBufferMemory()  # init langchain memory
     
     def _get_llm_response(self, prompt: str, system_message: Optional[str] = None) -> str:
-        """
-        Obtient une réponse du modèle LLM.
-        
-        Args:
-            prompt: Le prompt à envoyer au modèle
-            system_message: Message système optionnel pour guider le modèle
-            
-        Returns:
-            La réponse du modèle
-        """
         try:
             messages = []
-            
-            # Added system message if provided
+
+            # Add system message
             if system_message:
                 messages.append({"role": "system", "content": system_message})
+
+            # Convert memory to OpenAI-style format (MANUAL CONVERSION)
+            if self.memory.chat_memory.messages:
+                for msg in self.memory.chat_memory.messages:
+                    # Extract role and content from the message object
+                    if isinstance(msg, BaseMessage):
+                        role_mapping = {
+                            "human": "user",    # LangChain's "human" → Groq's "user"
+                            "ai": "assistant",  # LangChain's "ai" → Groq's "assistant"
+                            "system": "system"
+                        }
+                        role = role_mapping.get(msg.type, msg.type)  # Fallback to original if unknown
+                        content = msg.content
+                        messages.append({"role": role, "content": content})
+                    else:
+                        logger.warning(f"Invalid message format: {msg}")
             
-            # adding the prompt of the user 
-            messages.extend(self.memory)
+            # Add current user's prompt
             messages.append({"role": "user", "content": prompt})
-            
-            # API cal
+
+            # API call
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature
             )
-            
-            # Extraction et retour de la réponse
+
+            # Extract response and update memory
             llm_response = response.choices[0].message.content
-             # Update memory
-            self.memory.append({"role": "user", "content": prompt})
-            self.memory.append({"role": "assistant", "content": llm_response})
+            self.memory.chat_memory.add_user_message(prompt)
+            self.memory.chat_memory.add_ai_message(llm_response)
+
             return llm_response
-        
+
         except Exception as e:
-            logger.error(f"Error calling Groq API {e}")
-            return f"Sorry, an error occurred while communicating with the model {e}"
+            logger.error(f"Error calling Groq API: {e}")
+            return f"Sorry, an error occurred while communicating with the model: {e}"
     
     @abstractmethod
     def process_query(self, query: str, session: Session) -> Dict[str, Any]:

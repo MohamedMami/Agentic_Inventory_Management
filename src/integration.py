@@ -51,7 +51,6 @@ class SystemIntegration:
                     "data": None,
                     "error": "request type unknown"
                 }  
-        # Journalisation du résultat
             if "error" in results and results["error"]:
                 logger.error(f"error while handling the request: {results['error']}")
             else:

@@ -13,7 +13,8 @@ def test_inventory_queries():
     try:
         # Test queries
         test_queries = [
-            "what the generic of Ciprofloxacin 500mg Tablet?"
+            "what are the top selling products in december 2024?",
+            "what are the top 5 selling products?",
         ]
         
         for query in test_queries:
