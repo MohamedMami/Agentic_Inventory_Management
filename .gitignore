@@ -1,4 +1,6 @@
 .env
 inventory_venv
 __pycache__
-.logs
+logs
+data
+AIM.egg-info

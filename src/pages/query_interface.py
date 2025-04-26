@@ -1,157 +1,147 @@
 import sys
 import os
-# Add the src directory to PYTHONPATH
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 import streamlit as st
 import pandas as pd
-import os
 from datetime import datetime
 from sqlalchemy.orm import Session
 
 from src.database import engine
 from src.integration import system
-from logger import get_logger
+from src.logger import get_logger
 
 logger = get_logger("query_page")
 
-def query_page():
-    """Displays the conversational query interface page."""
-    logger.info("Loading query page")
-    st.title("Conversational Query Interface")
-    
-    # Introduction et exemples
-    st.write("""
-             ## Ask your questions in natural language
-            Our system uses artificial intelligence to understand your pharmaceutical inventory questions
-            and provide you with precise answers, relevant visualizations, or forecasts based on historical data.
-        """)
-    
-    # Exemples de requêtes
-    with st.expander("Examples of queries", expanded=False):
-        st.markdown("""
-        ### Inventory Queries
-        - Which products are below the alert threshold?
-        - How many units of Amoxicillin do we have in stock?
-        - Which products require a prescription?
-        - What is the average unit price of antibiotics?
+# Set page config at the very start
+st.set_page_config(
+    page_title="Pharmaceutical Query Interface",
+    page_icon="💊",
+    layout="wide"
+)
 
-        ### Visualization Queries
-        - Show me a graph of inventory by product category
-        - Visualize the distribution of products by warehouse
-        - Create a sales graph for the last 3 months
-        - Display the best-selling products as a graph
+# Initialize chat history in session state
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-        ### Forecasting Queries
-        - Forecast antibiotic demand for the next 3 months
-        - Which products are likely to be out of stock in the coming weeks?
-        - Analyze vitamin sales trends
-        - Predict inventory requirements for the next quarter
-        """)
-    
-    # history
-    if "query_history" not in st.session_state:
-        st.session_state.query_history = []
-        logger.debug("Initializing query history")
-    
+st.title("Pharmaceutical Inventory Chat")
 
-    if st.session_state.query_history:
-        with st.expander("Query history", expanded=False):
-            for i, (past_query, timestamp) in enumerate(st.session_state.query_history):
-                st.write(f"**{timestamp}**: {past_query}")
-                if i < len(st.session_state.query_history) - 1:
-                    st.divider()
-    
-    # query input
-    query = st.text_input(
-        "Your query:",
-        placeholder="Enter your question about pharmaceutical inventory...",
-        key="query_input"
-    )
-    
-    
-    col1, col2 = st.columns([1, 5])
-    with col1:
-        submit_button = st.button("Submit", type="primary", use_container_width=True)
-    with col2:
-        clear_button = st.button("erase", use_container_width=False)
-    
-    
-    if clear_button:
-        logger.debug("Delete the query")
-        st.session_state.query_input = ""
-        st.rerun()
-    
-    
-    if submit_button and query:
-        logger.info(f"New request submitted: '{query}'")
-        
-        timestamp = datetime.now().strftime("%d/%m/%Y %H:%M")
-        st.session_state.query_history.append((query, timestamp))
-        
-        if len(st.session_state.query_history) > 10:
-            st.session_state.query_history = st.session_state.query_history[-10:]
-        
-        session = Session(engine)
-        
-        try:
-            st.divider()
-            st.subheader(f"Requête: {query}")
-            with st.spinner("Processing your request..."):
-                logger.info("Processing the request via the integration module")
-                result = system.process_query(query, session)
-                
-                # query type 
-                query_type = result.get("query_type", "unkown")
-                st.caption(f"Query type detected: **{query_type}**")
-                logger.debug(f"Query type detected: {query_type}")
+# Chat interface
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        if message["role"] == "user":
+            st.markdown(message["content"])
+        else:
+            # Handle different types of assistant responses
+            if "response" in message:
+                st.markdown(message["response"])
             
-            # response 
-            if "response" in result and result["response"]:
-                st.write("### Answer")
-                st.write(result["response"])
-            
-            # data response 
-            if "data" in result and result["data"]:
-                with st.expander("Detailed data", expanded=True):
-                    st.dataframe(pd.DataFrame(result["data"]), use_container_width=True)
+            if "data" in message and message["data"] is not None:
+                with st.expander("View Data Details"):
+                    st.dataframe(pd.DataFrame(message["data"]))
                     
-                    # Option to download the data as CSV
-                    csv = pd.DataFrame(result["data"]).to_csv(index=False)
+                    # Download button for data
+                    csv = pd.DataFrame(message["data"]).to_csv(index=False)
                     st.download_button(
-                        label="Download data (CSV)",
+                        label="📥 Download Data (CSV)",
                         data=csv,
-                        file_name=f"query_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        file_name=f"data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                         mime="text/csv"
                     )
             
-            # visualization response
-            if "visualization_path" in result and result["visualization_path"]:
-                st.write("### Visualization")
-                
-                # Checking that the file exists
-                if os.path.exists(result["visualization_path"]):
-                    st.image(result["visualization_path"])
+            if "visualization_path" in message and message["visualization_path"]:
+                if os.path.exists(message["visualization_path"]):
+                    st.image(message["visualization_path"])
                     
-                    # Option to download the image
-                    with open(result["visualization_path"], "rb") as file:
+                    # Download button for visualization
+                    with open(message["visualization_path"], "rb") as file:
                         st.download_button(
-                            label="Download visualization",
+                            label="📥 Download Visualization",
                             data=file,
-                            file_name=os.path.basename(result["visualization_path"]),
+                            file_name=os.path.basename(message["visualization_path"]),
                             mime="image/png"
                         )
-                else:
-                    st.error(f"View file not found: {result['visualization_path']}")
-            
-            # error handling
-            if "error" in result and result["error"]:
-                st.error(f"error: {result['error']}")
-            
-            # Displaying the SQL query (for inventory queries)
-            if "sql_query" in result and result["sql_query"]:
-                with st.expander("Generated SQL query", expanded=False):
-                    st.code(result["sql_query"], language="sql")
-        
-        finally:
-            session.close()
+
+# Chat input
+query = st.chat_input("Ask about your pharmaceutical inventory...")
+
+if query:
+    # Add user message to chat history
+    st.session_state.messages.append({"role": "user", "content": query})
+    
+    # Display user message immediately
+    with st.chat_message("user"):
+        st.markdown(query)
+
+    # Display assistant response
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            session = Session(engine)
+            try:
+                result = system.process_query(query, session)
+                
+                assistant_message = {
+                    "role": "assistant",
+                    "response": result.get("response", "I couldn't process that query."),
+                    "data": result.get("data"),
+                    "visualization_path": result.get("visualization_path"),
+                    "query_type": result.get("query_type", "unknown")
+                }
+                
+                # Display response
+                st.markdown(assistant_message["response"])
+                
+                # Display data if available
+                if assistant_message["data"] is not None:
+                    with st.expander("View Data Details"):
+                        st.dataframe(pd.DataFrame(assistant_message["data"]))
+                        
+                        csv = pd.DataFrame(assistant_message["data"]).to_csv(index=False)
+                        st.download_button(
+                            label="📥 Download Data (CSV)",
+                            data=csv,
+                            file_name=f"data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                            mime="text/csv"
+                        )
+                
+                # Display visualization if available
+                if assistant_message["visualization_path"] and os.path.exists(assistant_message["visualization_path"]):
+                    st.image(assistant_message["visualization_path"])
+                    
+                    with open(assistant_message["visualization_path"], "rb") as file:
+                        st.download_button(
+                            label="📥 Download Visualization",
+                            data=file,
+                            file_name=os.path.basename(assistant_message["visualization_path"]),
+                            mime="image/png"
+                        )
+                
+                # Add assistant's response to chat history
+                st.session_state.messages.append(assistant_message)
+                
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
+            finally:
+                session.close()
+
+# Add a clear chat button
+if st.sidebar.button("Clear Chat History"):
+    st.session_state.messages = []
+    st.rerun()
+
+# Show example queries in sidebar
+with st.sidebar:
+    st.markdown("### Example Queries")
+    st.markdown("""
+    **Inventory Queries:**
+    - How many units of Amoxicillin do we have in stock?
+    - Which products are below the alert threshold?
+    
+    **Visualization Queries:**
+    - Show me a graph of inventory by category
+    - Display sales trends for the last 3 months
+    
+    **Forecasting Queries:**
+    - Predict inventory requirements for next quarter
+    - Analyze vitamin sales trends
+    """)

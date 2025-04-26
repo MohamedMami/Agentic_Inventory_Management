@@ -16,14 +16,10 @@ from datetime import datetime
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from agents.base_agent import BaseAgent  
-from agents.inventory_agent import InventoryAgent
+from src.agents.base_agent import BaseAgent  
+from src.agents.inventory_agent import InventoryAgent
 
-# Configuration du logging
-logger = logging.getLogger(__name__)
-from agents.inventory_agent import InventoryAgent
 
-# Configuration du logging
 logger = logging.getLogger(__name__)
 
 class VisualizationAgent(BaseAgent):

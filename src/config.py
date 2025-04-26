@@ -14,3 +14,5 @@ groq_model = os.getenv("groq_model")
 max_tokens = 4096
 temperature = 0.7
 
+DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1", "t")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

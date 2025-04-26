@@ -2,96 +2,108 @@
 Agent superviseur pour le système de gestion d'inventaire pharmaceutique.
 """
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from enum import Enum
-
+from functools import lru_cache
 from sqlalchemy.orm import Session
+from datetime import datetime
 
-from agents.base_agent import BaseAgent
+from src.agents.base_agent import BaseAgent
 
 # Configuration du logging
 logger = logging.getLogger(__name__)
 
 class QueryType(Enum):
-    """Types de requêtes possibles."""
+    """Query types supported by the system."""
     INVENTORY = "inventory"
     VISUALIZATION = "visualization"
     FORECAST = "forecast"
     UNKNOWN = "unknown"
 
 class SupervisorAgent(BaseAgent):
-    """
-    Agent superviseur responsable de router les requêtes vers les agents spécialisés.
-    """
+    """Optimized supervisor agent for routing queries to specialized agents."""
+    
+    # Add QueryType as a class attribute
+    QueryType = QueryType
     
     def __init__(self):
-        """Initialise l'agent superviseur."""
         super().__init__()
+        self._initialize_agent()
+        self.query_patterns = {
+            QueryType.INVENTORY: [
+                "stock", "inventory", "quantity", "available", "warehouse",
+                "expiry", "batch", "supply", "units", "products"
+            ],
+            QueryType.VISUALIZATION: [
+                "show", "display", "graph", "chart", "plot", "visualize",
+                "trend", "compare", "distribution", "breakdown"
+            ],
+            QueryType.FORECAST: [
+                "predict", "forecast", "future", "projection", "estimate",
+                "demand", "next", "upcoming", "expected", "trend"
+            ]
+        }
+
+    def _initialize_agent(self):
+        """Initialize agent with optimized system message."""
         self.system_message = """
-            You are an assistant specializing in pharmaceutical inventory management.
-            Your task is to analyze user queries and determine which agent type should handle each query.
-            Available agent types:
-            1. Inventory Agent: For queries regarding inventory, products, warehouses, etc.
-            2. Visualization Agent: For queries requesting charts, tables, or visualizations
-            3. Forecasting Agent: For queries regarding demand forecasts, future trends, etc.
+        You are an efficient pharmaceutical inventory management assistant.
+        Classify queries into: INVENTORY, VISUALIZATION, or FORECAST.
+        - INVENTORY: Stock levels, product info, warehouse data
+        - VISUALIZATION: Charts, graphs, visual analysis
+        - FORECAST: Predictions, trends, future projections
+        Respond only with the classification type.
+        """
 
-            Respond only with the appropriate agent type.
-            """
-    
     def classify_query(self, query: str) -> QueryType:
-        """
-        Classifies a user request to determine which agent should handle it.
-        Args:
-        query: The natural language query
-        Returns:
-        The query type (enum QueryType)
-        """
-        prompt = f"""
-        Analyzes the following query and determines which agent type should handle it.
-        Responds only with one of the following types: INVENTORY, VISUALIZATION, FORECAST.
-
-        Query: "{query}"
-        """
+        """Classify query using pattern matching."""
+        query_lower = query.lower()
         
-        response = self._get_llm_response(prompt, self.system_message)
+        # Try pattern matching first
+        for query_type, patterns in self.query_patterns.items():
+            if any(pattern in query_lower for pattern in patterns):
+                return query_type
         
-        # Normalization of the response
+        # Fall back to LLM for complex queries
+        response = self._get_llm_response(
+            f"Query: {query}\nClassification:",
+            self.system_message
+        )
+        
         response = response.strip().upper()
-        
         if "INVENTORY" in response:
             return QueryType.INVENTORY
         elif "VISUALIZATION" in response:
             return QueryType.VISUALIZATION
         elif "FORECAST" in response:
             return QueryType.FORECAST
-        else:
-            return QueryType.UNKNOWN
-    
-    def process_query(self, query: str, session: Session) -> Dict[str, Any]:
-        """
-            Processes a user request by routing it to the appropriate agent.
+            
+        return QueryType.UNKNOWN
 
-            Args:
-            query: The natural language query
-            session: Database session
+    async def process_query(self, query: str, session: Session) -> Dict[str, Any]:
+        """Process queries with improved error handling and response structure."""
+        try:
+            query_type = self.classify_query(query)
+            
+            response = {
+                "query": query,
+                "query_type": query_type.value,
+                "timestamp": datetime.now().isoformat(),
+                "response": None,
+                "data": None,
+                "visualization": None,
+                "error": None
+            }
 
-            Returns:
-            Dictionary containing the response and associated data
-        """
-        # classify the query
-        query_type = self.classify_query(query)
-        
-        # logging
-        logger.info(f"query classified as: {query_type.value}")
-        
-        response = {
-            "query": query,
-            "query_type": query_type.value,
-            "response": None,
-            "data": None,
-            "visualization": None
-        }
-        # At this stage, we are only performing the classification.
-        # Specific agents will be called in a later step.
-        
-        return response
+            logger.info(f"Query processed - Type: {query_type.value}")
+            return response
+
+        except Exception as e:
+            error_msg = f"Error processing query: {str(e)}"
+            logger.error(error_msg)
+            return {
+                "query": query,
+                "query_type": QueryType.UNKNOWN.value,
+                "error": error_msg,
+                "timestamp": datetime.now().isoformat()
+            }

@@ -5,8 +5,8 @@ import re
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from agents.base_agent import BaseAgent
-from models import sale, product, inventory
+from src.agents.base_agent import BaseAgent
+from src.models import Inventory, Product, Sale
 
 # Configuration du logging
 logger = logging.getLogger(__name__)
