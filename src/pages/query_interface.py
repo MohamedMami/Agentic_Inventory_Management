@@ -1,147 +1,195 @@
 import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
-
 import streamlit as st
 import pandas as pd
+from typing import Any, Dict
+import base64
 from datetime import datetime
 from sqlalchemy.orm import Session
-
 from src.database import engine
-from src.integration import system
+from src.integration import SystemIntegration
 from src.logger import get_logger
+import asyncio
 
 logger = get_logger("query_page")
 
-# Set page config at the very start
+# Initialize SystemIntegration
+system = SystemIntegration()
+
 st.set_page_config(
     page_title="Pharmaceutical Query Interface",
     page_icon="💊",
     layout="wide"
 )
 
-# Initialize chat history in session state
+# Initialize session state
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "conversation_id" not in st.session_state:
+    st.session_state.conversation_id = f"conv_{datetime.now().strftime('%Y%m%d%H%M%S')}"
 
 st.title("Pharmaceutical Inventory Chat")
 
-# Chat interface
+# Chat history display
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         if message["role"] == "user":
             st.markdown(message["content"])
         else:
-            # Handle different types of assistant responses
-            if "response" in message:
-                st.markdown(message["response"])
+            st.markdown(message.get("response", "No response"))
             
-            if "data" in message and message["data"] is not None:
-                with st.expander("View Data Details"):
-                    st.dataframe(pd.DataFrame(message["data"]))
-                    
-                    # Download button for data
-                    csv = pd.DataFrame(message["data"]).to_csv(index=False)
-                    st.download_button(
-                        label="📥 Download Data (CSV)",
-                        data=csv,
-                        file_name=f"data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv"
-                    )
-            
-            if "visualization_path" in message and message["visualization_path"]:
-                if os.path.exists(message["visualization_path"]):
-                    st.image(message["visualization_path"])
-                    
-                    # Download button for visualization
-                    with open(message["visualization_path"], "rb") as file:
-                        st.download_button(
-                            label="📥 Download Visualization",
-                            data=file,
-                            file_name=os.path.basename(message["visualization_path"]),
-                            mime="image/png"
-                        )
+            # Display data if available
+            if message.get("data"):
+                st.subheader("Data")
+                display_data(message["data"])
+                
+            # Display visualization
+            if message.get("visualization_base64"):
+                st.image(
+                    message["visualization_base64"], 
+                    caption="Generated Visualization",
+                    use_column_width=True
+                )
 
 # Chat input
 query = st.chat_input("Ask about your pharmaceutical inventory...")
 
 if query:
-    # Add user message to chat history
-    st.session_state.messages.append({"role": "user", "content": query})
+    async def process():
+        session = Session(engine)
+        try:
+            result = await system.process_query(
+                query, 
+                session=session, 
+                conversation_id=st.session_state.conversation_id
+            )
+            
+            assistant_message = {
+                "role": "assistant",
+                "response": result.get("response", "No response"),
+                "data": result.get("data"),
+                "visualization_base64": result.get("visualization_base64"),
+                "query_type": result.get("query_type", "unknown")
+            }
+            
+            # Display response
+            st.markdown(assistant_message["response"])
+            
+            # Handle data
+            if assistant_message.get("data"):
+                display_data(assistant_message["data"])
+                
+            # Handle visualization
+            if assistant_message.get("visualization_base64"):
+                st.image(
+                    assistant_message["visualization_base64"],
+                    use_column_width=True
+                )
+                # Download button
+                img_data = base64.b64decode(
+                    assistant_message["visualization_base64"].split(",")[1]
+                )
+                st.download_button(
+                    label="📥 Download Visualization",
+                    data=img_data,
+                    file_name=f"viz_{datetime.now().strftime('%Y%m%d%H%M%S')}.png",
+                    mime="image/png"
+                )
+            
+            # Handle errors
+            if result.get("error"):
+                st.error(f"Error: {result['error']}")
+            
+            # Save to session state
+            st.session_state.messages.append(assistant_message)
+            
+        except Exception as e:
+            st.error(f"System Error: {str(e)}")
+        finally:
+            session.close()
     
-    # Display user message immediately
-    with st.chat_message("user"):
-        st.markdown(query)
+    # Run the async function
+    asyncio.run(process())
 
-    # Display assistant response
-    with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            session = Session(engine)
-            try:
-                result = system.process_query(query, session)
-                
-                assistant_message = {
-                    "role": "assistant",
-                    "response": result.get("response", "I couldn't process that query."),
-                    "data": result.get("data"),
-                    "visualization_path": result.get("visualization_path"),
-                    "query_type": result.get("query_type", "unknown")
-                }
-                
-                # Display response
-                st.markdown(assistant_message["response"])
-                
-                # Display data if available
-                if assistant_message["data"] is not None:
-                    with st.expander("View Data Details"):
-                        st.dataframe(pd.DataFrame(assistant_message["data"]))
-                        
-                        csv = pd.DataFrame(assistant_message["data"]).to_csv(index=False)
-                        st.download_button(
-                            label="📥 Download Data (CSV)",
-                            data=csv,
-                            file_name=f"data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                            mime="text/csv"
-                        )
-                
-                # Display visualization if available
-                if assistant_message["visualization_path"] and os.path.exists(assistant_message["visualization_path"]):
-                    st.image(assistant_message["visualization_path"])
-                    
-                    with open(assistant_message["visualization_path"], "rb") as file:
-                        st.download_button(
-                            label="📥 Download Visualization",
-                            data=file,
-                            file_name=os.path.basename(assistant_message["visualization_path"]),
-                            mime="image/png"
-                        )
-                
-                # Add assistant's response to chat history
-                st.session_state.messages.append(assistant_message)
-                
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
-            finally:
-                session.close()
-
-# Add a clear chat button
+# Clear chat button
 if st.sidebar.button("Clear Chat History"):
     st.session_state.messages = []
+    st.session_state.conversation_id = f"conv_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     st.rerun()
 
-# Show example queries in sidebar
+# Example queries
 with st.sidebar:
     st.markdown("### Example Queries")
     st.markdown("""
     **Inventory Queries:**
-    - How many units of Amoxicillin do we have in stock?
-    - Which products are below the alert threshold?
+    - "Show all antibiotics expiring in next 30 days"
+    - "Which products are below minimum stock levels?"
     
     **Visualization Queries:**
-    - Show me a graph of inventory by category
-    - Display sales trends for the last 3 months
+    - "Plot sales by category for Q2 2023"
+    - "Compare sales of Paracetamol vs Ibuprofen"
     
-    **Forecasting Queries:**
-    - Predict inventory requirements for next quarter
-    - Analyze vitamin sales trends
+    **Forecast Queries:**
+    - "Forecast demand for vaccines in next 60 days"
+    - "Predict sales of diabetes medications for Q4"
+    
+    **Composite Queries:**
+    - "Analyze antibiotic stock and forecast next month's demand"
+    - "Visualize sales trends and predict inventory needs for antivirals"
     """)
+
+# Helper function for recursive data display
+def display_data(data: Any, depth: int = 0, max_depth: int = 5):
+    """
+    Display data in a structured format with better type handling and depth control.
+    
+    Args:
+        data: The data to display
+        depth: Current recursion depth
+        max_depth: Maximum recursion depth
+    """
+    try:
+        if depth > max_depth:
+            st.warning("Max depth reached. Some data may not be fully expanded.")
+            st.write(str(data))
+            return
+
+        if isinstance(data, pd.DataFrame):
+            st.dataframe(data)
+            
+        elif isinstance(data, dict):
+            for k, v in data.items():
+                with st.expander(f"**{k}**", expanded=(depth == 0)):
+                    display_data(v, depth + 1, max_depth)
+                    
+        elif isinstance(data, (list, tuple)):
+            try:
+                # Try to convert to DataFrame if list contains dicts
+                if data and isinstance(data[0], dict):
+                    df = pd.DataFrame(data)
+                    st.dataframe(df)
+                else:
+                    # Display as regular list if conversion fails
+                    st.write(data)
+            except Exception:
+                st.write(data)
+                
+        elif isinstance(data, (int, float)):
+            # Show numerical data with metric
+            st.metric(label="Value", value=data)
+            
+        elif isinstance(data, bool):
+            # Show boolean as checkbox
+            st.checkbox("Value", value=data, disabled=True)
+            
+        elif data is None:
+            st.info("No data available")
+            
+        else:
+            # Default fallback for other types
+            st.write(data)
+            
+    except Exception as e:
+        logger.error(f"Error displaying data: {str(e)}")
+        st.error(f"Error displaying data: {str(e)}")
