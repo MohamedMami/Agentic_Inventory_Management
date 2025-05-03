@@ -1,71 +1,66 @@
-"""
-integration module for the system components
-"""
 import logging
 from sqlalchemy.orm import Session
-from src.database import engine
+from sqlalchemy import create_engine
+from typing import Dict, Any 
+from src.agents.supervisorReAct import SupervisorReActAgent
+from src.agents.inventory_agent import InventoryAgent
 from src.agents.visualization_agent import VisualizationAgent
-from src.agents.supervisor_agent import SupervisorAgent
-from src.agents.inventory_agent import InventoryAgent 
+import os
+import datetime
+import asyncio
 
 class SystemIntegration:
     def __init__(self):
-        #logger.info("initialisation of the system ")
+        # Initialize the Supervisor with proper configuration   
+        self.supervisor = SupervisorReActAgent(
+            model_name="llama-3.3-70b-versatile",
+            temperature=0.1,
+            redis_url=os.getenv("REDIS_URL", "redis://localhost:6379")
+        )
         
-        self.supervisor = SupervisorAgent()
-        self.inventory = InventoryAgent()
-        #self.forecast = ForcastAgent()
-        self.visualization = VisualizationAgent()
+        # Initialize and register specialized agents
+        self.inventory_agent = InventoryAgent()
+        self.visualization_agent = VisualizationAgent()
+        # self.forecast_agent = ForecastAgent()  # Uncomment if available
         
-        #logger.info("initialisation of agents")
-    def process_query(self,query, session: None):
-        
-        
-        #logger.info("processing query")
+        self.supervisor.register_agent("inventory", self.inventory_agent)
+        self.supervisor.register_agent("visualization", self.visualization_agent)
+        # self.supervisor.register_agent("forecast", self.forecast_agent)
+
+    async def process_query(
+        self, 
+        query: str, 
+        session: Session = None, 
+        conversation_id: str = None) -> Dict[str, Any]:
         close_session = False
+        engine = create_engine(os.getenv("DATABASE_URL"))
+        
         if session is None:
             session = Session(engine)
             close_session = True
-        try :
-            query_type = self.supervisor.classify_query(query)
-            #logger.info(f"query classified as: {query_type.value}")
-            if query_type == SupervisorAgent.QueryType.INVENTORY:
-                results = self.inventory.process_query(query, session)
-                results["query_type"] = "inventory"
-            elif query_type == SupervisorAgent.QueryType.VISUALIZATION:
-                results = self.visualization.process_query(query, session)
-                results["query_type"] = "visualization"
-            # elif query_type == SupervisorAgent.QueryType.FORECAST:
-            #     results = self.forecast.process_query(query, session)
-            #     results["query_type"] = "forecast"
-            else:
-                #logger.warning(f"request type unknown: {query_type.value}")
-                results = {
-                    "query": query,
-                    "query_type": "Unknown",
-                    "response": "sorry ,we can't comprehend your question.Please reformulate again.",
-                    "data": None,
-                    "error": "request type unknown"
-                }  
-            #if "error" in results and results["error"]:
-                #logger.error(f"error while handling the request: {results['error']}")
-            #else:
-                #logger.info("resuest successfully handled")
+        
+        try:
+            # Generate conversation ID
+            if not conversation_id:
+                conversation_id = f"conv_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
             
-            return results
+            # Let the Supervisor handle everything
+            result = await self.supervisor.process_query(
+                query=query,
+                session=session,
+                conversation_id=conversation_id
+            )
+            
+            return result  # Supervisor returns a structured response
             
         except Exception as e:
-            #logger.error(f"Unhandled error while processing the request: {e}")
+            logging.error(f"SystemIntegration Error: {str(e)}")
             return {
                 "query": query,
-                "response": f"An error occurred while processing your request: {e}",
+                "response": "An error occurred. Please try again.",
                 "data": None,
                 "error": str(e)
             }
         finally:
-            # Fermeture de la session si créée localement
             if close_session:
                 session.close()
-                #logger.debug("Session closed")
-                
-system = SystemIntegration()

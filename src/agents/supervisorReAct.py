@@ -5,6 +5,7 @@ from functools import lru_cache
 from sqlalchemy.orm import Session
 from datetime import datetime
 import json
+import os
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
@@ -86,8 +87,21 @@ class SupervisorReActAgent:
     
     def __init__(self, model_name="llama-3.3-70b-versatile", temperature=0, redis_url="redis://localhost:6379"):
         """Initialize the ReAct Supervisor agent with LangGraph components"""
-        # Initialize the LLM
-        self.llm = ChatGroq(model_name=model_name, temperature=temperature)
+        # Check for GROQ API key
+        groq_api_key = os.getenv("GROQ_API_KEY")
+        if not groq_api_key:
+            raise ValueError("GROQ_API_KEY environment variable not set")
+        
+        # Initialize the LLM with proper error handling
+        try:
+            self.llm = ChatGroq(
+                model_name=model_name,
+                temperature=temperature,
+                groq_api_key=groq_api_key
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize ChatGroq: {str(e)}")
+            raise
         
         # Query patterns for classification
         self.query_patterns = {
@@ -344,61 +358,35 @@ class SupervisorReActAgent:
         
         return new_state
     
-    def _process_composite_query(self, state: AgentState) -> AgentState:
-        """Process a composite query using multiple specialized agents"""
-        session = state["session"]
-        sub_queries = state.get("sub_queries", [])
-        
-        new_state = state.copy()
-        sub_query_results = []
-        
-        # Process each sub-query with the appropriate agent
-        for sub_query in sub_queries:
-            query = sub_query.get("query", "")
-            query_type = sub_query.get("type", "").lower()
-            
-            # Get the appropriate agent
-            agent = self.agent_registry.get(query_type)
-            
-            if not agent:
-                # No agent registered, continue to next sub-query
-                logger.warning(f"No agent registered for type: {query_type}")
-                sub_query_results.append({
-                    "query": query,
-                    "query_type": query_type,
-                    "status": "error",
-                    "error": f"No agent registered for type: {query_type}"
+    async def _process_composite_query(self, state: AgentState) -> AgentState:
+        """Process a composite query by breaking it down and handling sub-queries"""
+        try:
+            sub_responses = []
+            for sub_query in state["sub_queries"]:
+                # Process each sub-query
+                sub_result = await self._process_sub_query(sub_query, state["session"])
+                sub_responses.append({
+                    "query_type": sub_query["type"],
+                    "query": sub_query["query"],
+                    "result": sub_result
                 })
-                continue
+
+            # Update state with composite results
+            state["final_response"] = {
+                "integrated_response": "Composite query processed successfully",
+                "sub_responses": sub_responses,
+                "data": None  # Add any aggregated data if needed
+            }
             
-            try:
-                # Hand off to the specialized agent
-                agent_response = agent.process_query(query, session)
-                
-                # Add to results
-                sub_query_results.append({
-                    "query": query,
-                    "query_type": query_type,
-                    "status": "success",
-                    "result": agent_response
-                })
-            
-            except Exception as e:
-                logger.error(f"Error in {query_type} agent: {e}")
-                sub_query_results.append({
-                    "query": query,
-                    "query_type": query_type,
-                    "status": "error",
-                    "error": f"Error in {query_type} agent: {str(e)}"
-                })
-        
-        # Update state with all results
-        new_state["action_results"] = state.get("action_results", []) + [{
-            "status": "success",
-            "sub_query_results": sub_query_results
-        }]
-        
-        return new_state
+            return state
+
+        except Exception as e:
+            logger.error(f"Error in composite query processing: {str(e)}")
+            state["final_response"] = {
+                "response": f"Error processing composite query: {str(e)}",
+                "error": str(e)
+            }
+            return state
     
     def _generate_final_response(self, state: AgentState) -> AgentState:
         """Generate the final response by integrating all results"""
@@ -547,48 +535,56 @@ class SupervisorReActAgent:
         
         return history
     
-    async def process_query(self, query: str, session: Session, conversation_id: str = None) -> Dict[str, Any]:
-        """
-        Process a query using the ReAct workflow with memory.
-        
-        Args:
-            query: The natural language query
-            session: Database session
-            conversation_id: Unique identifier for this conversation 
-            
-        Returns:
-            Dictionary containing the final response
-        """
-        # Generate a unique conversation ID if not provided
-        if not conversation_id:
-            conversation_id = f"conv_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-        
-        # Load chat history
-        chat_history = self._load_chat_history(conversation_id)
-        
-        # Initialize state
-        initial_state: AgentState = {
-            "query": query,
-            "session": session,
-            "thoughts": [],
-            "actions": [],
-            "action_results": [],
-            "query_type": None,
-            "sub_queries": None,
-            "final_response": None,
-            "memory": [],
-            "conversation_id": conversation_id,
-            "chat_history": chat_history
-        }
-        
-        # Execute the workflow
-        final_state = self.workflow.invoke(initial_state)
-        
-        # Return the final response
-        return final_state.get("final_response", {
-            "query": query,
-            "query_type": "unknown",
-            "timestamp": datetime.now().isoformat(),
-            "error": "No response generated",
-            "response": "Failed to process query"
-        })
+    async def process_query(
+        self,
+        query: str,
+        session: Session,
+        conversation_id: str = None
+    ) -> Dict[str, Any]:
+        """Process a query and return structured response"""
+        try:
+            # Initialize state
+            state = AgentState(
+                query=query,
+                session=session,
+                thoughts=[],
+                actions=[],
+                action_results=[],
+                query_type=None,
+                sub_queries=None,
+                final_response=None,
+                memory=[],
+                conversation_id=conversation_id or f"conv_{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                chat_history=[]
+            )
+
+            # Run the workflow using ainvoke instead of arun
+            final_state = await self.workflow.ainvoke(state)
+
+            # Structure the response
+            response = {
+                "query": query,
+                "query_type": final_state["query_type"],
+                "response": final_state.get("final_response", {}).get("response", "No response generated"),
+                "data": final_state.get("final_response", {}).get("data"),
+                "error": None
+            }
+
+            # Handle composite queries
+            if final_state["query_type"] == "composite":
+                response.update({
+                    "integrated_response": final_state.get("final_response", {}).get("integrated_response"),
+                    "sub_responses": final_state.get("final_response", {}).get("sub_responses", [])
+                })
+
+            return response
+
+        except Exception as e:
+            logger.error(f"Error processing query: {str(e)}")
+            return {
+                "query": query,
+                "query_type": "unknown",
+                "response": "An error occurred while processing the query.",
+                "error": str(e),
+                "data": None
+            }

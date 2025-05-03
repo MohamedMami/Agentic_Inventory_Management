@@ -31,7 +31,7 @@ async def main():
         
         # Example queries remain the same
         queries = [
-            "Show me all antibiotics that will expire in the next 30 days",
+            "what are the top 5 selling products?",
             "Create a bar chart of our top 10 selling products this quarter",
             "Analyze our antibiotic stock levels and create a visualization of which products need reordering, then forecast the demand for these products over the next quarter"
         ]
@@ -43,6 +43,11 @@ async def main():
                 print(f"\n=== Processing Query: {query} ===")
                 result = await supervisor.process_query(query, session, conversation_id)
                 
+                # Ensure result is a dictionary
+                if isinstance(result, str):
+                    print(f"Error: Received string response instead of dictionary: {result}")
+                    continue
+                
                 print(f"Query Type: {result.get('query_type', 'UNKNOWN')}")
                 
                 if result.get('query_type') == 'composite':
@@ -51,8 +56,11 @@ async def main():
                     if result.get('sub_responses'):
                         print("\nSub-responses:")
                         for sub_response in result.get('sub_responses', []):
-                            response_text = sub_response.get('result', {}).get('response', 'No response')
-                            print(f"- {sub_response.get('query_type')}: {response_text[:100]}...")
+                            if isinstance(sub_response, dict):
+                                response_text = sub_response.get('result', {}).get('response', 'No response')
+                                print(f"- {sub_response.get('query_type')}: {response_text[:100]}...")
+                            else:
+                                print(f"Invalid sub-response format: {sub_response}")
                 else:
                     print(f"Response: {result.get('response', 'No response available')}")
                 
