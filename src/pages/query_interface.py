@@ -14,7 +14,22 @@ import asyncio
 
 logger = get_logger("query_page")
 
-# Initialize SystemIntegration
+# Add environment check at the start of the file
+def check_environment():
+    # Check for GROQ API key - required
+    if not os.getenv("GROQ_API_KEY"):
+        st.error("Missing required environment variable: GROQ_API_KEY")
+        st.stop()
+    
+    # Set default Redis URL if not provided
+    if not os.getenv("REDIS_URL"):
+        os.environ["REDIS_URL"] = "redis://localhost:6379"
+        logger.info("Using default Redis URL: redis://localhost:6379")
+
+# Call check at app startup
+check_environment()
+
+# Initialize SystemIntegration with Redis URL
 system = SystemIntegration()
 
 st.set_page_config(

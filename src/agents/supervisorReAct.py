@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 import json
 import os
+import asyncio
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
@@ -88,54 +89,60 @@ class SupervisorReActAgent:
     def __init__(self, model_name="llama-3.3-70b-versatile", temperature=0, redis_url="redis://localhost:6379"):
         """Initialize the ReAct Supervisor agent with LangGraph components"""
         # Check for GROQ API key
-        groq_api_key = os.getenv("GROQ_API_KEY")
+        groq_api_key = os.getenv("groq_api_key")
         if not groq_api_key:
-            raise ValueError("GROQ_API_KEY environment variable not set")
+            raise ValueError("GROQ_API_KEY environment variable is not set")
         
-        # Initialize the LLM with proper error handling
+        # Validate Redis URL
+        if not redis_url:
+            redis_url = "redis://localhost:6379"  # Default fallback
+        
+        # Initialize the LLM
         try:
             self.llm = ChatGroq(
-                model_name=model_name,
                 temperature=temperature,
-                groq_api_key=groq_api_key
+                groq_api_key=groq_api_key,
+                model_name=model_name
             )
+            
+            # Store validated Redis URL
+            self.redis_url = redis_url
+            
+            # Initialize rest of components
+            # Query patterns for classification
+            self.query_patterns = {
+                QueryType.INVENTORY: [
+                    "stock", "inventory", "quantity", "available", "warehouse",
+                    "expiry", "batch", "supply", "units", "products"
+                ],
+                QueryType.VISUALIZATION: [
+                    "show", "display", "graph", "chart", "plot", "visualize",
+                    "trend", "compare", "distribution", "breakdown"
+                ],
+                QueryType.FORECAST: [
+                    "predict", "forecast", "future", "projection", "estimate",
+                    "demand", "next", "upcoming", "expected", "trend"
+                ]
+            }
+            
+            # Create output parsers
+            self.classification_parser = JsonOutputParser(pydantic_object=QueryClassificationOutput)
+            self.response_parser = JsonOutputParser(pydantic_object=FinalResponseOutput)
+            
+            # Build the ReAct graph
+            self.workflow = self._build_graph()
+            
+            # Agent registry for handoffs - would be instantiated by actual code
+            # This is just a placeholder structure
+            self.agent_registry = {
+                "inventory": None,  # Will be set from outside
+                "visualization": None,  # Will be set from outside
+                "forecast": None  # Will be set from outside
+            }
+            
         except Exception as e:
-            logger.error(f"Failed to initialize ChatGroq: {str(e)}")
+            logger.error(f"Failed to initialize SupervisorReActAgent: {str(e)}")
             raise
-        
-        # Query patterns for classification
-        self.query_patterns = {
-            QueryType.INVENTORY: [
-                "stock", "inventory", "quantity", "available", "warehouse",
-                "expiry", "batch", "supply", "units", "products"
-            ],
-            QueryType.VISUALIZATION: [
-                "show", "display", "graph", "chart", "plot", "visualize",
-                "trend", "compare", "distribution", "breakdown"
-            ],
-            QueryType.FORECAST: [
-                "predict", "forecast", "future", "projection", "estimate",
-                "demand", "next", "upcoming", "expected", "trend"
-            ]
-        }
-        
-        # Memory storage configuration
-        self.redis_url = redis_url
-        
-        # Create output parsers
-        self.classification_parser = JsonOutputParser(pydantic_object=QueryClassificationOutput)
-        self.response_parser = JsonOutputParser(pydantic_object=FinalResponseOutput)
-        
-        # Build the ReAct graph
-        self.workflow = self._build_graph()
-        
-        # Agent registry for handoffs - would be instantiated by actual code
-        # This is just a placeholder structure
-        self.agent_registry = {
-            "inventory": None,  # Will be set from outside
-            "visualization": None,  # Will be set from outside
-            "forecast": None  # Will be set from outside
-        }
     
     def register_agent(self, agent_type: str, agent_instance: Any) -> None:
         """Register a specialized agent for handoffs"""
@@ -387,7 +394,51 @@ class SupervisorReActAgent:
                 "error": str(e)
             }
             return state
-    
+    async def _process_sub_query(self, sub_query: Dict[str, str], session: Session) -> Dict[str, Any]:
+        """Process an individual sub-query by routing to appropriate agent"""
+        query_type = sub_query.get("type", "").lower()
+        query_text = sub_query.get("query", "")
+        
+        try:
+            # Get the appropriate agent
+            agent = self.agent_registry.get(query_type)
+            
+            if not agent:
+                return {
+                    "status": "error",
+                    "error": f"No agent registered for query type: {query_type}",
+                    "query": query_text
+                }
+            
+            # Process with appropriate agent
+            if hasattr(agent, 'process_query'):
+                if asyncio.iscoroutinefunction(agent.process_query):
+                    result = await agent.process_query(query_text, session)
+                else:
+                    result = agent.process_query(query_text, session)
+                    
+                return {
+                    "status": "success",
+                    "result": result,
+                    "query": query_text,
+                    "query_type": query_type
+                }
+            else:
+                return {
+                    "status": "error",
+                    "error": f"Agent for {query_type} does not implement process_query",
+                    "query": query_text
+                }
+                
+        except Exception as e:
+            logger.error(f"Error processing sub-query: {str(e)}")
+            return {
+                "status": "error",
+                "error": str(e),
+                "query": query_text,
+                "query_type": query_type
+            }
+        
     def _generate_final_response(self, state: AgentState) -> AgentState:
         """Generate the final response by integrating all results"""
         query = state["query"]

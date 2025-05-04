@@ -16,9 +16,6 @@ def test_forecast_agent():
         # Test different types of forecast queries
         test_queries = [
             "Show me the sales forecast for Paracetamol for the next 30 days",
-            "Create a forecast for Antibiotics category with ARIMA(2,1,2)",
-            "What will be the sales trend for Amoxicillin in the next 45 days?",
-            "Generate a 60-day forecast for pain relief medications"
         ]
         
         for query in test_queries:

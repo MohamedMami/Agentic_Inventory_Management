@@ -123,7 +123,7 @@ class ForecastAgent(BaseAgent):
         # System messages for different tasks
         self.parsing_system_message = """
         You are an expert in pharmaceutical sales forecasting.
-        Extract forecasting parameters from user queries: product (ID/name/category), horizon days,
+        Extract forecasting parameters from user queries: product (product_id/product_name/category), horizon days,
         optional ARIMA(p,d,q), and confidence interval (default 0.95).
         """
 
@@ -250,57 +250,93 @@ class ForecastAgent(BaseAgent):
 
     def _fetch_historical_data(self, session: Session, params: ForecastParameters) -> pd.DataFrame:
         try:
-            # Build the base query
-            query = """
-            SELECT 
-                DATE(s.sale_date) as date,
-                SUM(s.quantity) as total_sales
-            FROM sales s
-            JOIN products p ON s.product_id = p.id
-            WHERE 1=1
+            # Validate data integrity
+            self.validate_data_integrity(session)
+            
+            # Build base SQL with proper aggregation
+            sql = """
+                SELECT 
+                    sale_date::date AS date,
+                    SUM(quantity) AS total_sales,
+                    MIN(product_name) as product_name,
+                    MIN(category) as category
+                FROM sales s
+                WHERE 1=1
             """
             
-            query_params = {}
-            
-            # Add conditions based on parameters
-            if params.product_name:
-                query += " AND p.name ILIKE :product_name"
-                query_params['product_name'] = f"%{params.product_name}%"
-            
+            # Add filters
             if params.product_id:
-                query += " AND p.id = :product_id"
-                query_params['product_id'] = params.product_id
+                sql += " AND product_id = :pid"
+            elif params.product_name:
+                sql += " AND product_name ILIKE :pname"
+            elif params.category:
+                sql += " AND category ILIKE :cat"
                 
-            if params.category:
-                query += " AND p.category ILIKE :category"
-                query_params['category'] = f"%{params.category}%"
-                
-            # Group by date to handle duplicates
-            query += " GROUP BY DATE(s.sale_date) ORDER BY date"
+            # Group by date only
+            sql += " GROUP BY sale_date::date ORDER BY sale_date::date"
             
             # Execute query
-            result = session.execute(text(query), query_params)
-            df = pd.DataFrame(result.fetchall(), columns=['date', 'total_sales'])
+            logger.debug(f"Executing query: {sql}")
+            result = session.execute(text(sql), {
+                'pid': params.product_id,
+                'pname': f"%{params.product_name}%" if params.product_name else None,
+                'cat': f"%{params.category}%" if params.category else None
+            })
             
-            # Ensure date is index and handle any remaining duplicates
+            # Convert to DataFrame
+            df = pd.DataFrame(result.fetchall(), columns=['date', 'total_sales', 'product_name', 'category'])
+            if df.empty:
+                logger.info("No historical data found for the given parameters.")
+                return df
+            
+            # Preprocess data properly
             df['date'] = pd.to_datetime(df['date'])
             df = df.set_index('date')
             
-            # Resample to daily frequency and fill missing values
-            df = df.resample('D').sum()
-            df = df.fillna(0)
+            # Ensure continuous daily data
+            date_range = pd.date_range(start=df.index.min(), end=df.index.max(), freq='D')
+            df = df.reindex(date_range)
+            df['total_sales'] = df['total_sales'].fillna(0)
             
-            if df.empty:
-                raise ValueError("No data found for the given parameters")
-                
+            # Forward fill product info
+            df['product_name'] = df['product_name'].ffill()
+            df['category'] = df['category'].ffill()
+            
             return df
-            
+
         except Exception as e:
             logger.error(f"Error fetching historical data: {str(e)}")
+            session.rollback()
+            raise
+
+    def validate_data_integrity(self, session: Session):
+        try:
+            # Check for missing product_ids in sales
+            missing_product_ids = session.execute(
+                text("SELECT COUNT(*) FROM sales WHERE product_id NOT IN (SELECT product_id FROM products)")
+            ).scalar()
+            if missing_product_ids > 0:
+                logger.warning(f"Found {missing_product_ids} sales records with missing product_ids.")
+            
+            # Check for null categories in products
+            null_categories = session.execute(
+                text("SELECT COUNT(*) FROM products WHERE category IS NULL")
+            ).scalar()
+            if null_categories > 0:
+                logger.warning(f"Found {null_categories} products with null categories.")
+        except Exception as e:
+            logger.error(f"Data validation error: {str(e)}")
+            session.rollback()
             raise
 
     def _generate_forecast(self, data: pd.DataFrame, params: ForecastParameters) -> Dict[str, Any]:
         try:
+            # Get product info from the data
+            product_info = {
+                'name': data['product_name'].iloc[0],
+                'category': data['category'].iloc[0]
+            }
+            
             # Fit ARIMA model
             model = ARIMA(data['total_sales'], 
                          order=(params.p, params.d, params.q))
@@ -339,9 +375,20 @@ class ForecastAgent(BaseAgent):
                 'bic': results.bic
             }
             
+            # Create visualization
+            viz = self._create_visualization(
+                data['total_sales'],
+                mean_forecast,
+                conf_int,
+                forecast_dates,
+                product_info['name']
+            )
+            
             return {
+                'product_info': product_info,
                 'forecast_values': forecast_values,
-                'statistics': statistics
+                'statistics': statistics,
+                'visualization_base64': viz
             }
             
         except Exception as e:
