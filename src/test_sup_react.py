@@ -33,7 +33,6 @@ async def main():
         queries = [
             "what are the top 5 selling products?",
             "Create a bar chart of our top 10 selling products this quarter",
-            "Analyze our antibiotic stock levels and create a visualization of which products need reordering, then forecast the demand for these products over the next quarter"
         ]
         
         conversation_id = "test_conversation"

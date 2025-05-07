@@ -8,153 +8,17 @@ import base64
 from datetime import datetime
 from sqlalchemy.orm import Session
 from src.database import engine
-from src.integration import SystemIntegration
 from src.logger import get_logger
 import asyncio
 
+
+from src.agents.supervisorReAct import SupervisorReActAgent
+from src.agents.inventory_agent import InventoryAgent
+from src.agents.visualization_agent import VisualizationAgent
+
 logger = get_logger("query_page")
+visualization_logger = get_logger("visualization")
 
-# Add environment check at the start of the file
-def check_environment():
-    # Check for GROQ API key - required
-    if not os.getenv("GROQ_API_KEY"):
-        st.error("Missing required environment variable: GROQ_API_KEY")
-        st.stop()
-    
-    # Set default Redis URL if not provided
-    if not os.getenv("REDIS_URL"):
-        os.environ["REDIS_URL"] = "redis://localhost:6379"
-        logger.info("Using default Redis URL: redis://localhost:6379")
-
-# Call check at app startup
-check_environment()
-
-# Initialize SystemIntegration with Redis URL
-system = SystemIntegration()
-
-st.set_page_config(
-    page_title="Pharmaceutical Query Interface",
-    page_icon="💊",
-    layout="wide"
-)
-
-# Initialize session state
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "conversation_id" not in st.session_state:
-    st.session_state.conversation_id = f"conv_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-
-st.title("Pharmaceutical Inventory Chat")
-
-# Chat history display
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        if message["role"] == "user":
-            st.markdown(message["content"])
-        else:
-            st.markdown(message.get("response", "No response"))
-            
-            # Display data if available
-            if message.get("data"):
-                st.subheader("Data")
-                display_data(message["data"])
-                
-            # Display visualization
-            if message.get("visualization_base64"):
-                st.image(
-                    message["visualization_base64"], 
-                    caption="Generated Visualization",
-                    use_column_width=True
-                )
-
-# Chat input
-query = st.chat_input("Ask about your pharmaceutical inventory...")
-
-if query:
-    async def process():
-        session = Session(engine)
-        try:
-            result = await system.process_query(
-                query, 
-                session=session, 
-                conversation_id=st.session_state.conversation_id
-            )
-            
-            assistant_message = {
-                "role": "assistant",
-                "response": result.get("response", "No response"),
-                "data": result.get("data"),
-                "visualization_base64": result.get("visualization_base64"),
-                "query_type": result.get("query_type", "unknown")
-            }
-            
-            # Display response
-            st.markdown(assistant_message["response"])
-            
-            # Handle data
-            if assistant_message.get("data"):
-                display_data(assistant_message["data"])
-                
-            # Handle visualization
-            if assistant_message.get("visualization_base64"):
-                st.image(
-                    assistant_message["visualization_base64"],
-                    use_column_width=True
-                )
-                # Download button
-                img_data = base64.b64decode(
-                    assistant_message["visualization_base64"].split(",")[1]
-                )
-                st.download_button(
-                    label="📥 Download Visualization",
-                    data=img_data,
-                    file_name=f"viz_{datetime.now().strftime('%Y%m%d%H%M%S')}.png",
-                    mime="image/png"
-                )
-            
-            # Handle errors
-            if result.get("error"):
-                st.error(f"Error: {result['error']}")
-            
-            # Save to session state
-            st.session_state.messages.append(assistant_message)
-            
-        except Exception as e:
-            st.error(f"System Error: {str(e)}")
-        finally:
-            session.close()
-    
-    # Run the async function
-    asyncio.run(process())
-
-# Clear chat button
-if st.sidebar.button("Clear Chat History"):
-    st.session_state.messages = []
-    st.session_state.conversation_id = f"conv_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    st.rerun()
-
-# Example queries
-with st.sidebar:
-    st.markdown("### Example Queries")
-    st.markdown("""
-    **Inventory Queries:**
-    - "Show all antibiotics expiring in next 30 days"
-    - "Which products are below minimum stock levels?"
-    
-    **Visualization Queries:**
-    - "Plot sales by category for Q2 2023"
-    - "Compare sales of Paracetamol vs Ibuprofen"
-    
-    **Forecast Queries:**
-    - "Forecast demand for vaccines in next 60 days"
-    - "Predict sales of diabetes medications for Q4"
-    
-    **Composite Queries:**
-    - "Analyze antibiotic stock and forecast next month's demand"
-    - "Visualize sales trends and predict inventory needs for antivirals"
-    """)
-
-# Helper function for recursive data display
 def display_data(data: Any, depth: int = 0, max_depth: int = 5):
     """
     Display data in a structured format with better type handling and depth control.
@@ -208,3 +72,173 @@ def display_data(data: Any, depth: int = 0, max_depth: int = 5):
     except Exception as e:
         logger.error(f"Error displaying data: {str(e)}")
         st.error(f"Error displaying data: {str(e)}")
+
+def check_environment():
+    if not os.getenv("GROQ_API_KEY"):
+        st.error("Missing required environment variable: GROQ_API_KEY")
+        st.stop()
+    if not os.getenv("REDIS_URL"):
+        os.environ["REDIS_URL"] = "redis://localhost:6379"
+        logger.info("Using default Redis URL")
+
+check_environment()
+
+# Add these style definitions after the imports
+def local_css():
+    st.markdown("""
+        <style>
+        .chat-message {
+            padding: 1rem;
+            border-radius: 0.5rem;
+            margin-bottom: 1rem;
+            display: flex;
+            flex-direction: column;
+        }
+        .user-message {
+            background-color: #e3f2fd;
+            border-left: 5px solid #2196f3;
+        }
+        .assistant-message {
+            background-color: #f3f3f3;
+            border-left: 5px solid #4caf50;
+        }
+        .message-content {
+            margin: 0;
+            padding: 0;
+        }
+        .message-timestamp {
+            font-size: 0.8rem;
+            color: #666;
+            align-self: flex-end;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+# Initialize SupervisorReActAgent
+supervisor = SupervisorReActAgent(
+    model_name="llama-3.3-70b-versatile",
+    redis_url=os.getenv("REDIS_URL")
+)
+
+# Register sub-agents
+supervisor.register_agent("inventory", InventoryAgent())
+supervisor.register_agent("visualization", VisualizationAgent())
+#supervisor.register_agent("forecast", ForecastAgent())
+
+# Set up Streamlit page configuration
+st.set_page_config(
+    page_title="Pharmaceutical Query Interface",
+    page_icon="💊",
+    layout="wide"
+)
+
+# Initialize session state
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "conversation_id" not in st.session_state:
+    st.session_state.conversation_id = f"conv_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+st.title("Pharmaceutical Inventory Chat")
+local_css()
+
+# Create two columns for a better chat layout
+col1, col2 = st.columns([3, 1])
+
+with col1:
+    # Display chat history
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"], avatar="🧑‍💼" if message["role"] == "user" else "🤖"):
+            # Add timestamp if not present
+            if "timestamp" not in message:
+                message["timestamp"] = datetime.now().strftime("%H:%M")
+
+            # Display message content
+            st.markdown(f"**{message['role'].title()}** ({message['timestamp']})")
+            if message["role"] == "user":
+                st.markdown(f"_{message['content']}_")
+            else:
+                st.markdown(message.get("response", ""))
+                
+                # Display any additional data
+                if message.get("data"):
+                    with st.expander("📊 View Data Details"):
+                        display_data(message["data"])
+                        
+                # Display visualization if available
+                if message.get("visualization_base64"):
+                    st.image(message["visualization_base64"], use_column_width=True)
+                    img_data = base64.b64decode(
+                        message["visualization_base64"].split(",")[1]
+                    )
+                    st.download_button(
+                        label="📥 Download Visualization",
+                        data=img_data,
+                        file_name=f"viz_{datetime.now().strftime('%Y%m%d%H%M%S')}.png",
+                        mime="image/png"
+                    )
+                
+                # Display any errors
+                if message.get("error"):
+                    st.error(f"Error: {message['error']}")
+
+with col2:
+    # Add a sidebar with conversation info
+    st.sidebar.title("Chat Info")
+    st.sidebar.markdown(f"**Conversation ID:**  \n`{st.session_state.conversation_id}`")
+    st.sidebar.markdown(f"**Messages:** {len(st.session_state.messages)}")
+    
+    # Add a clear chat button
+    if st.sidebar.button("🗑️ Clear Chat"):
+        st.session_state.messages = []
+        st.rerun()
+
+# Chat input and processing
+query = st.chat_input("Ask about your pharmaceutical inventory...")
+
+# Modify the process function to include logging
+async def process():
+    session = Session(engine)
+    try:
+        user_message = {
+            "role": "user",
+            "content": query,
+            "timestamp": datetime.now().strftime("%H:%M")
+        }
+        st.session_state.messages.append(user_message)
+        
+        # Add logging before processing
+        logger.info(f"Processing query: {query}")
+        
+        result = await supervisor.process_query(
+            query,
+            session=session,
+            conversation_id=st.session_state.conversation_id
+        )
+        
+        # Add logging for visualization check
+        if "visualization_base64" in result:
+            logger.info("Visualization found in result")
+        else:
+            logger.warning("No visualization found in result")
+            
+        assistant_message = {
+            "role": "assistant",
+            "response": result.get("response", "No response"),
+            "data": result.get("data"),
+            "visualization_base64": result.get("visualization_base64"),
+            "query_type": result.get("query_type", "unknown"),
+            "error": result.get("error"),
+            "timestamp": datetime.now().strftime("%H:%M")
+        }
+        
+        st.session_state.messages.append(assistant_message)
+        st.rerun()
+            
+    except Exception as e:
+        logger.error(f"Error in process function: {str(e)}")
+        st.error(f"System Error: {str(e)}")
+    finally:
+        session.close()
+
+if query:
+    asyncio.run(process())
