@@ -163,7 +163,7 @@ class SupervisorReActAgent:
         # 1. Create the graph
         graph = StateGraph(AgentState)
         
-        # 2. Add nodes
+        # 2. Add nodes with async support
         graph.add_node("classify_query", self._classify_query)
         graph.add_node("process_inventory", self._process_inventory_query)
         graph.add_node("process_visualization", self._process_visualization_query)
@@ -291,7 +291,7 @@ class SupervisorReActAgent:
         
         return new_state
     
-    def _process_visualization_query(self, state: AgentState) -> AgentState:
+    async def _process_visualization_query(self, state: AgentState) -> AgentState:
         """Process query using the visualization agent"""
         query = state["query"]
         session = state["session"]
@@ -302,7 +302,6 @@ class SupervisorReActAgent:
         visualization_agent = self.agent_registry.get("visualization")
         
         if not visualization_agent:
-            # No agent registered, return error
             new_state["action_results"] = state.get("action_results", []) + [{
                 "status": "error",
                 "error": "Visualization agent not registered"
@@ -310,8 +309,11 @@ class SupervisorReActAgent:
             return new_state
         
         try:
-            # Hand off to the visualization agent
-            agent_response = visualization_agent.process_query(query, session)
+            # Hand off to the visualization agent and properly await the response
+            if asyncio.iscoroutinefunction(visualization_agent.process_query):
+                agent_response = await visualization_agent.process_query(query, session)
+            else:
+                agent_response = visualization_agent.process_query(query, session)
             
             # Update state with result
             new_state["action_results"] = state.get("action_results", []) + [{

@@ -11,6 +11,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
 import os
+import base64
+import asyncio
 from datetime import datetime
 
 from sqlalchemy import text
@@ -140,7 +142,7 @@ class VisualizationAgent(BaseAgent):
         
         return cleaned_code
     
-    def execute_visualization_code(self, code: str, query: str) -> Tuple[str, Optional[str]]:
+    async def execute_visualization_code(self, code: str, query: str) -> Tuple[str, Optional[str]]:
         """
         Executes the visualization code and saves the result.
         """
@@ -180,7 +182,10 @@ class VisualizationAgent(BaseAgent):
             exec(code, namespace)
             
             if os.path.exists(html_path):
-                return html_path, None
+                # Convert HTML to base64
+                with open(html_path, "r", encoding="utf-8") as file:
+                    html_content = file.read()
+                return html_content, None
             else:
                 return "", "Visualization file was not created"
                 
@@ -189,20 +194,19 @@ class VisualizationAgent(BaseAgent):
             error_msg = f"Error creating visualization: {str(e)}\nCode:\n{code}"
             return "", error_msg
     
-    def generate_visualization_description(self, query: str, data: List[Dict[str, Any]], viz_path: str) -> str:
+    async def generate_visualization_description(self, query: str, data: List[Dict[str, Any]]) -> str:
         """
         Generates a description of the created visualization.
 
         Args:
         query: The original query in natural language
         data: The data used for the visualization
-        viz_path: The path to the visualization file
 
         Returns:
         A natural language description of the visualization
         """
        
-        data_json = json.dumps(data[:5], ensure_ascii=False, default=str)  # Limité aux 5 premiers éléments
+        data_json = json.dumps(data[:5], ensure_ascii=False, default=str)  
         
         prompt = f"""
         Here is a user query and the data used to create a visualization.
@@ -211,8 +215,6 @@ class VisualizationAgent(BaseAgent):
         Query: "{query}"
 
         Sample data: {data_json}
-
-        The visualization was saved in: {viz_path}
 
         Explain what the visualization shows, the key trends or insights,
         and how it answers the user query.
@@ -224,57 +226,68 @@ class VisualizationAgent(BaseAgent):
         Use a professional and precise tone, appropriate for the pharmaceutical industry.
         """
         
-        response = self._get_llm_response(prompt, system_message)
+        response = await self._get_llm_response(prompt, system_message)
         
         return response
     
-    def process_query(self, query: str, session: Session) -> Dict[str, Any]:
+    async def process_query(self, query: str, session: Session) -> Dict[str, Any]:
         """
-        Processes a user query regarding the visualization.
+        Processes a user query regarding the visualization asynchronously.
 
         Args:
-        query: The natural language query
-        session: Database session
+            query: The natural language query
+            session: Database session
 
         Returns:
-        Dictionary containing the response and associated data
+            Dictionary containing the response and associated data
         """
-        # Using the inventory agent to get the data
-        inventory_response = self.inventory_agent.process_query(query, session)
-        data = inventory_response.get("data", [])
-        
-        # Preparing the response
-        response = {
-            "query": query,
-            "data": data,
-            "visualization_path": None,
-            "error": None,
-            "response": None
-        }
-        
-        # If no data, return an error
-        if not data:
-            response["error"] = "No data available to create a visualization."
-            response["response"] = "Sorry, I was unable to obtain data to create a visualization based on your query."
+        try:
+            # Using the inventory agent to get the data asynchronously
+            inventory_response = await self.inventory_agent.process_query(query, session)
+            data = inventory_response.get("data", [])
+            
+            # Preparing the response
+            response = {
+                "query": query,
+                "data": data,
+                "visualization_base64": None,  # Changed from visualization_path to visualization_base64
+                "error": None,
+                "response": None,
+                "query_type": "visualization"  # Added query_type
+            }
+            
+            # If no data, return an error
+            if not data:
+                response["error"] = "No data available to create a visualization."
+                response["response"] = "Sorry, I was unable to obtain data to create a visualization based on your query."
+                return response
+            
+            # Generating the visualization code
+            viz_code = await self.generate_visualization_code(query, data)
+            logger.info(f"Visualization code generated: {viz_code[:100]}...")
+            
+            # Executing the visualization code and getting base64 image
+            viz_base64, error = await self.execute_visualization_code(viz_code, query)
+            
+            if error:
+                response["error"] = error
+                response["response"] = f"Sorry, an error occurred while creating the visualization: {error}"
+                return response
+            
+            # Adding the visualization html  data to the response
+            response["visualization__html"] = viz_base64
+            
+            # Generating the visualization description
+            description = await self.generate_visualization_description(query, data)
+            response["response"] = description
+            
             return response
-        
-        # Generating the visualization code
-        viz_code = self.generate_visualization_code(query, data)
-        logger.info(f"visualisation code generated: {viz_code[:100]}...")
-        
-        # excuting the visualization code
-        viz_path, error = self.execute_visualization_code(viz_code, query)
-        
-        if error:
-            response["error"] = error
-            response["response"] = f"Sorry, an error occurred while creating the visualization: {error}"
-            return response
-        
-        # Adding the visualization path to the response
-        response["visualization_path"] = viz_path
-        
-        # Generating the visualization description
-        description = self.generate_visualization_description(query, data, viz_path)
-        response["response"] = description
-        
-        return response
+            
+        except Exception as e:
+            logger.error(f"Error in process_query: {str(e)}")
+            return {
+                "query": query,
+                "error": str(e),
+                "response": f"An error occurred while processing your visualization request: {str(e)}",
+                "query_type": "visualization"
+            }

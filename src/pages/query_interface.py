@@ -19,6 +19,30 @@ from src.agents.visualization_agent import VisualizationAgent
 logger = get_logger("query_page")
 visualization_logger = get_logger("visualization")
 
+
+def debug_visualization(viz_data: str) -> Dict:
+    """
+    Debug visualization data format and content.
+    """
+    debug_info = {
+        "has_data": bool(viz_data),
+        "format": None,
+        "size": len(viz_data) if viz_data else 0,
+        "is_valid": False
+    }
+    
+    if viz_data:
+        try:
+            if "," in viz_data:
+                header, content = viz_data.split(",", 1)
+                debug_info["format"] = header
+                # Try decoding base64
+                base64.b64decode(content)
+                debug_info["is_valid"] = True
+        except Exception as e:
+            debug_info["error"] = str(e)
+            
+    return debug_info 
 def display_data(data: Any, depth: int = 0, max_depth: int = 5):
     """
     Display data in a structured format with better type handling and depth control.
@@ -164,19 +188,14 @@ with col1:
                     with st.expander("📊 View Data Details"):
                         display_data(message["data"])
                         
-                # Display visualization if available
-                if message.get("visualization_base64"):
-                    st.image(message["visualization_base64"], use_column_width=True)
-                    img_data = base64.b64decode(
-                        message["visualization_base64"].split(",")[1]
-                    )
-                    st.download_button(
-                        label="📥 Download Visualization",
-                        data=img_data,
-                        file_name=f"viz_{datetime.now().strftime('%Y%m%d%H%M%S')}.png",
-                        mime="image/png"
-                    )
-                
+                # Replace the existing visualization display code
+                if message.get("visualization_html"):
+                    viz_html = message["visualization_html"]
+                    try:
+                        # Display the interactive Plotly HTML directly
+                        st.components.v1.html(viz_html, height=600, scrolling=True)
+                    except Exception as e:
+                        st.error(f"Error displaying visualization: {str(e)}")
                 # Display any errors
                 if message.get("error"):
                     st.error(f"Error: {message['error']}")
@@ -191,6 +210,19 @@ with col2:
     if st.sidebar.button("🗑️ Clear Chat"):
         st.session_state.messages = []
         st.rerun()
+    
+    # Add debug section
+    with st.sidebar.expander("🔧 Debug Tools"):
+        if st.button("Check Last Visualization"):
+            if st.session_state.messages:
+                last_message = [m for m in st.session_state.messages if m["role"] == "assistant"][-1]
+                viz_data = last_message.get("visualization_base64")
+                debug_info = debug_visualization(viz_data)
+                st.json(debug_info)
+                
+                if viz_data:
+                    st.text("First 100 chars of viz_data:")
+                    st.code(viz_data[:100])
 
 # Chat input and processing
 query = st.chat_input("Ask about your pharmaceutical inventory...")
@@ -201,7 +233,7 @@ async def process():
     try:
         user_message = {
             "role": "user",
-            "content": query,
+            "content": query,   
             "timestamp": datetime.now().strftime("%H:%M")
         }
         st.session_state.messages.append(user_message)
@@ -209,11 +241,8 @@ async def process():
         # Add logging before processing
         logger.info(f"Processing query: {query}")
         
-        result = await supervisor.process_query(
-            query,
-            session=session,
-            conversation_id=st.session_state.conversation_id
-        )
+        result = await supervisor.process_query(query, session=session, conversation_id=st.session_state.conversation_id)
+
         
         # Add logging for visualization check
         if "visualization_base64" in result:
@@ -226,6 +255,7 @@ async def process():
             "response": result.get("response", "No response"),
             "data": result.get("data"),
             "visualization_base64": result.get("visualization_base64"),
+            "visualization_html": result.get("visualization_html"),  
             "query_type": result.get("query_type", "unknown"),
             "error": result.get("error"),
             "timestamp": datetime.now().strftime("%H:%M")
@@ -242,3 +272,5 @@ async def process():
 
 if query:
     asyncio.run(process())
+
+
