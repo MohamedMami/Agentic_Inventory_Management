@@ -5,3 +5,5 @@ logs
 data
 AIM.egg-info
 test_outputs
+models
+forecast_visualizations
