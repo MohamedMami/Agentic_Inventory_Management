@@ -4,7 +4,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 
 from datetime import datetime
 import pandas as pd
-from src.agents.forecast_agent import ForecastAgent
+from src.agents.ArimaForecast_agent import ForecastAgent
 from src.database import Session
 
 def test_forecast_agent():

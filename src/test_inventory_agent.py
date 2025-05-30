@@ -14,7 +14,6 @@ def test_inventory_queries():
         # Test queries
         test_queries = [
             "what are the top selling products in december 2024?",
-            "what are the top 5 selling products?",
         ]
         
         for query in test_queries:

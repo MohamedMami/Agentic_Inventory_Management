@@ -18,7 +18,7 @@ def test_prophet_forecasting():
     try:
         # Test queries
         test_queries = [
-            "Forecast Azithromycin 500mg Tablet sales for next 30 days",
+            "can you forecast Azithromycin 500mg Tablet for the next 90 days",
         ]
         
         # Process each query
@@ -37,6 +37,10 @@ def test_prophet_forecasting():
                 
             # Print forecast results
             data = result['data']
+            print("\nTraining Data Information:")
+            print(f"Number of training samples: {data.get('training_info', {}).get('n_samples', 'N/A')}")
+            print(f"Training period: {data.get('training_info', {}).get('date_range', 'N/A')}")
+            
             print("\nProduct Information:")
             print(f"Name: {data['product_info']['name']}")
             print(f"Category: {data['product_info']['category']}")
