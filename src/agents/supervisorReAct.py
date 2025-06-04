@@ -507,6 +507,8 @@ class SupervisorReActAgent:
                     "response": agent_response.get("response"),
                     "data": agent_response.get("data"),
                     "visualization": agent_response.get("visualization"),
+                    "visualization_path": agent_response.get("visualization_path")  if agent_response.get("visualization_path") else None,
+                    "visualization_base64": agent_response.get("visualization_base64")  if agent_response.get("visualization_base64") else None,
                     "error": agent_response.get("error")
                 }
         
@@ -620,6 +622,7 @@ class SupervisorReActAgent:
                 "query_type": final_state["query_type"],
                 "response": final_state.get("final_response", {}).get("response", "No response generated"),
                 "data": final_state.get("final_response", {}).get("data"),
+                "visualization_path": final_state.get("final_response", {}).get("visualization_path"),
                 "error": None
             }
 

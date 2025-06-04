@@ -4,17 +4,21 @@ import os
 from datetime import datetime
 
 from pages import dashboard, query_interface
-from integration import system
 
+# Ensure page config is first Streamlit command
 st.set_page_config(
     page_title="Agentic Inventory Management",
     page_icon="💊",
     layout="wide",
-    initial_sidebar_state="expanded"  # Ensures the sidebar is open by default
+    initial_sidebar_state="expanded"
 )
 
 def main():
     """User interface for the system."""
+    # Initialize default page if not set
+    if "page" not in st.session_state:
+        st.session_state.page = "Dashboard"
+
     # Sidebar setup
     st.sidebar.title("Smart Pharma Inventory")
     st.sidebar.image("https://img.icons8.com/color/96/000000/pharmacy-shop.png", width=100)
@@ -30,9 +34,11 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.caption(f"Date: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
 
-    # Navigation menu with explicit default (dashboard first in options)
+    # Navigation menu with Dashboard as default
     st.sidebar.markdown("## Navigation")
-    page = st.sidebar.radio("Navigation", ["Dashboard", "Query Interface"])
+    page = st.sidebar.radio("Navigation", ["Dashboard", "Query Interface"], 
+                           index=0,  # Explicitly set Dashboard as default
+                           key="navigation")
 
     # Route based on selection
     if page == "Dashboard":

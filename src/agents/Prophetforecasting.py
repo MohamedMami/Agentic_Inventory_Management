@@ -13,7 +13,8 @@ import numpy as np
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from prophet import Prophet
-from sklearn.metrics import mean_absolute_error, mean_squared_error
+from prophet.diagnostics import cross_validation, performance_metrics
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, accuracy_score, precision_score, recall_score, f1_score
 
 from .base_agent import BaseAgent
 
@@ -70,7 +71,7 @@ class ProphetForecastAgent(BaseAgent):
                     "category": None,
                     "horizon": 30,
                     "seasonality_mode": "additive",
-                    "yearly_seasonality": True,
+                    "yearly_seasonality": True  ,
                     "weekly_seasonality": True,
                     "daily_seasonality": False,
                     "confidence_interval": 0.95
@@ -400,8 +401,33 @@ class ProphetForecastAgent(BaseAgent):
             'mape': float(mape) if not np.isnan(mape) else None
         }
 
+    def _perform_cross_validation(self, model: Prophet, df: pd.DataFrame, horizon_days: int) -> Dict[str, float]:
+        """Perform cross-validation on the Prophet model."""
+        try:
+            # Perform cross-validation
+            cv_results = cross_validation(
+                model,
+                initial='730 days',  # 2 years of training
+                period='180 days',   # Test on 6-month periods
+                horizon=f'{horizon_days} days',
+                parallel="processes"
+            )
+            
+            # Calculate performance metrics
+            cv_metrics = performance_metrics(cv_results)
+            
+            return {
+                'rmse': float(cv_metrics['rmse'].mean()),
+                'mape': float(cv_metrics['mape'].mean()),
+                'coverage': float(cv_metrics['coverage'].mean())
+            }
+            
+        except Exception as e:
+            logger.error(f"Cross-validation failed: {str(e)}")
+            return {}
+
     def _generate_forecast(self, data: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Enhanced forecast generation with inventory insights."""
+        """Generate forecast using FB Prophet."""
         try:
             # Get product info from the data
             product_info = {
@@ -432,6 +458,9 @@ class ProphetForecastAgent(BaseAgent):
             aligned_pred = historical_forecast['yhat']
             
             metrics = self._calculate_evaluation_metrics(aligned_actual, aligned_pred)
+            
+            # Cross-validation metrics
+            cv_metrics = self._perform_cross_validation(model, data, horizon)
             
             # Get forecast for future dates only
             future_forecast = forecast[~forecast['ds'].isin(historical_dates)]
@@ -468,7 +497,8 @@ class ProphetForecastAgent(BaseAgent):
                     'lead_time': int(data['lead_time'].iloc[-1]),
                     'stock_coverage_days': float(data['current_stock'].iloc[-1] / data['total_sales'].mean()),
                     'reorder_point': float(data['min_stock_level'].iloc[-1] * 1.5)
-                }
+                },
+                'cross_validation_metrics': cv_metrics
             }
             
             # Create visualization
@@ -478,12 +508,37 @@ class ProphetForecastAgent(BaseAgent):
                 product_info['name']
             )
             
+            insights = self._generate_insights(
+                product_info['name'],
+                forecast_values,
+                statistics,
+                metrics
+            )
+            
+            # Anomaly detection
+            anomalies = self._detect_anomalies(data['total_sales'], forecast)
+            
+            # Enhanced metrics
+            enhanced_metrics = self._enhanced_evaluation(aligned_actual, aligned_pred)
+            
+            # Risk assessment
+            risk_assessment = self._assess_forecast_risks(forecast_values, statistics['inventory_metrics'])
+            
             return {
                 'product_info': product_info,
+                'training_info': {
+                    'n_samples': len(data),
+                    'date_range': f"{data.index.min().strftime('%Y-%m-%d')} to {data.index.max().strftime('%Y-%m-%d')}"
+                },
                 'forecast_values': forecast_values,
                 'statistics': statistics,
                 'evaluation_metrics': metrics,
-                'visualization_base64': viz
+                'insights': insights,
+                'visualization_base64': viz,
+                'cross_validation_metrics': cv_metrics,
+                'anomalies': anomalies,
+                'enhanced_metrics': enhanced_metrics,
+                'risk_assessment': risk_assessment
             }
             
         except Exception as e:
@@ -541,3 +596,184 @@ class ProphetForecastAgent(BaseAgent):
         plt.close()
         
         return img
+
+    def _detect_anomalies(self, historical: pd.Series, forecast: pd.DataFrame, sigma: float = 3) -> List[Dict[str, Any]]:
+        """Detect anomalies in historical data using statistical methods."""
+        try:
+            # Calculate rolling statistics
+            rolling_mean = historical.rolling(window=7).mean()
+            rolling_std = historical.rolling(window=7).std()
+            
+            # Define bounds
+            upper_bound = rolling_mean + (sigma * rolling_std)
+            lower_bound = rolling_mean - (sigma * rolling_std)
+            
+            # Detect anomalies
+            anomalies = []
+            for date, value in historical.items():
+                if value > upper_bound[date] or value < lower_bound[date]:
+                    anomalies.append({
+                        'date': date.strftime('%Y-%m-%d'),
+                        'value': float(value),
+                        'expected_range': [
+                            float(lower_bound[date]),
+                            float(upper_bound[date])
+                        ],
+                        'deviation': float((value - rolling_mean[date]) / rolling_std[date])
+                    })
+            
+            return anomalies
+            
+        except Exception as e:
+            logger.error(f"Anomaly detection failed: {str(e)}")
+            return []
+    
+    def _engineer_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add engineered features to improve forecast accuracy."""
+        try:
+            # Copy dataframe to avoid modifications
+            enhanced_df = df.copy()
+            
+            # Add time-based features
+            enhanced_df['day_of_week'] = enhanced_df.index.dayofweek
+            enhanced_df['month'] = enhanced_df.index.month
+            enhanced_df['quarter'] = enhanced_df.index.quarter
+            
+            # Add rolling statistics
+            enhanced_df['rolling_mean_7d'] = enhanced_df['total_sales'].rolling(window=7).mean()
+            enhanced_df['rolling_std_7d'] = enhanced_df['total_sales'].rolling(window=7).std()
+            enhanced_df['rolling_mean_30d'] = enhanced_df['total_sales'].rolling(window=30).mean()
+            
+            # Add lag features
+            enhanced_df['lag_1d'] = enhanced_df['total_sales'].shift(1)
+            enhanced_df['lag_7d'] = enhanced_df['total_sales'].shift(7)
+            enhanced_df['lag_30d'] = enhanced_df['total_sales'].shift(30)
+            
+            # Add growth rates
+            enhanced_df['growth_rate_7d'] = (enhanced_df['total_sales'] - enhanced_df['lag_7d']) / enhanced_df['lag_7d']
+            
+            return enhanced_df
+            
+        except Exception as e:
+            logger.error(f"Feature engineering failed: {str(e)}")
+            return df
+
+    def _enhanced_evaluation(self, actual: pd.Series, predicted: pd.Series) -> Dict[str, Any]:
+        """Calculate comprehensive forecast evaluation metrics."""
+        try:
+            basic_metrics = self._calculate_evaluation_metrics(actual, predicted)
+            
+            # Calculate directional accuracy
+            actual_direction = np.sign(actual.diff())
+            pred_direction = np.sign(predicted.diff())
+            directional_accuracy = np.mean(actual_direction == pred_direction)
+            
+            # Calculate forecast bias
+            bias = np.mean(predicted - actual)
+            
+            # Calculate tracking signal
+            running_sum = np.cumsum(predicted - actual)
+            running_mad = pd.Series(abs(predicted - actual)).cumsum()
+            tracking_signal = running_sum / running_mad
+            
+            return {
+                **basic_metrics,
+                'directional_accuracy': float(directional_accuracy),
+                'forecast_bias': float(bias),
+                'tracking_signal': float(tracking_signal.iloc[-1]),
+                'forecast_quality': 'good' if basic_metrics['mape'] < 20 else 'fair' if basic_metrics['mape'] < 30 else 'poor'
+            }
+            
+        except Exception as e:
+            logger.error(f"Enhanced evaluation failed: {str(e)}")
+            return basic_metrics
+    
+    def _assess_forecast_risks(self, forecast_values: List[Dict[str, Any]], 
+                         inventory_data: Dict[str, float]) -> Dict[str, Any]:
+        """Assess inventory risks based on forecast."""
+        try:
+            forecasted_demand = [f['forecast'] for f in forecast_values]
+            
+            # Calculate risk metrics
+            stock_out_risk = np.mean([
+                1 if f > inventory_data['current_stock'] else 0 
+                for f in forecasted_demand
+            ])
+            
+            days_until_reorder = int(
+                (inventory_data['current_stock'] - inventory_data['min_stock_level']) / 
+                np.mean(forecasted_demand)
+            )
+            
+            return {
+                'stock_out_probability': float(stock_out_risk),
+                'days_until_reorder_needed': days_until_reorder,
+                'risk_level': 'high' if stock_out_risk > 0.2 else 'medium' if stock_out_risk > 0.1 else 'low',
+                'recommended_actions': [
+                    'Increase safety stock' if stock_out_risk > 0.2 else 'Monitor closely',
+                    f"Place order within {days_until_reorder} days" if days_until_reorder < 14 else 'Stock levels adequate'
+                ]
+            }
+            
+        except Exception as e:
+            logger.error(f"Risk assessment failed: {str(e)}")
+            return {}
+
+    def calculate_additional_metrics(self, y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
+        """
+        Calculate additional performance metrics for model evaluation.
+        
+        Args:
+            y_true: Array of actual values
+            y_pred: Array of predicted values
+            
+        Returns:
+            Dictionary containing calculated metrics
+        """
+        try:
+            # Add debug logging
+            logger.info(f"Calculating metrics for arrays of shape: true={y_true.shape}, pred={y_pred.shape}")
+            logger.info(f"Sample values - true: {y_true[:5]}, pred: {y_pred[:5]}")
+            
+            # Validate inputs
+            if len(y_true) == 0 or len(y_pred) == 0:
+                logger.error("Empty arrays provided for metric calculation")
+                return {}
+                
+            if np.isnan(y_true).any() or np.isnan(y_pred).any():
+                logger.error("Arrays contain NaN values")
+                return {}
+
+            # R2 Score
+            r2 = r2_score(y_true, y_pred)
+            logger.info(f"Calculated R2 score: {r2}")
+            
+            # Convert continuous values to binary for classification metrics
+            y_mean = np.mean(y_true)
+            y_true_binary = (y_true > y_mean).astype(int)
+            y_pred_binary = (y_pred > y_mean).astype(int)
+            
+            # Calculate classification metrics with error handling
+            try:
+                accuracy = accuracy_score(y_true_binary, y_pred_binary)
+                precision = precision_score(y_true_binary, y_pred_binary)
+                recall = recall_score(y_true_binary, y_pred_binary)
+                f1 = f1_score(y_true_binary, y_pred_binary)
+            except Exception as e:
+                logger.error(f"Error in classification metrics: {str(e)}")
+                return {'r2_score': r2}  # Return at least R2 if classification metrics fail
+            
+            metrics = {
+                'r2_score': r2,
+                'accuracy': accuracy,
+                'precision': precision,
+                'recall': recall,
+                'f1_score': f1
+            }
+            
+            logger.info(f"Calculated metrics: {metrics}")
+            return metrics
+            
+        except Exception as e:
+            logger.error(f"Error calculating additional metrics: {str(e)}")
+            return {}

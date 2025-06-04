@@ -32,7 +32,7 @@ class TestResults:
             "success": not bool(result.get("error")),
             "error": result.get("error"),
             "duration_seconds": duration,
-            "has_visualization": bool(result.get("visualization_base64")),
+            "has_visualization": result.get("visualization_path"),
             "response_length": len(str(result.get("response", "")))
         })
     
@@ -87,12 +87,7 @@ async def main():
         supervisor.register_agent("forecasting", forecasting_agent)
         # Comprehensive test queries
         queries = [
-            "what are the top 5 selling products?",
-            "show me the inventory levels for antibiotics",
-            "forecast demand for Azithromycin 200mg/5ml Suspension for next month",
-            "visualize monthly sales trends for 2024",
-            "which products are below reorder point?",
-            "what's the current value of inventory by category?"
+            "can you forecast Metformin 500mg Tablet for the next 90 days ",
         ]
         
         conversation_id = f"test_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -127,6 +122,8 @@ async def main():
                                 print(f"Invalid sub-response format: {sub_response}")
                 else:
                     print(f"Response: {result.get('response', 'No response available')}")
+                    print(f"Visualization Path: {result.get('visualization_path', 'No visualization')}")
+                    print(f"visualization_base64: {result.get('visualization_base64', 'No base64 visualization')}")
                 
                 if result.get('error'):
                     print(f"Error: {result.get('error')}")

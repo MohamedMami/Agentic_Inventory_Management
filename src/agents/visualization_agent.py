@@ -26,13 +26,26 @@ logger = logging.getLogger(__name__)
 
 class VisualizationAgent(BaseAgent):
     """
-   Agent specializing in the visualization of pharmaceutical inventory data.
+    Agent specializing in the visualization of pharmaceutical inventory data.
     """
     
     def __init__(self):
         """Initializes the visualization agent."""
         super().__init__()
         self.inventory_agent = InventoryAgent()
+        
+        # Define visualization directory with absolute path
+        self.viz_dir = os.path.abspath(os.path.join(
+            os.path.dirname(__file__),  # Current file's directory
+            "..", "..",                 # Go up two levels
+            "data",
+            "visualizations"
+        ))
+        
+        # Create visualization directory if it doesn't exist
+        os.makedirs(self.viz_dir, exist_ok=True)
+        logger.info(f"Visualization directory initialized at: {self.viz_dir}")
+        
         self.system_message = """
             You are an assistant specializing in pharmaceutical inventory data visualization.
             Your task is to analyze user queries regarding visualization and generate
@@ -142,65 +155,69 @@ class VisualizationAgent(BaseAgent):
         
         return cleaned_code
     
-    async def execute_visualization_code(self, code: str, query: str) -> Tuple[str, Optional[str]]:
-        """
-        Executes the visualization code and saves the result.
-        """
+    async def execute_visualization_code(self, code: str) -> Tuple[str, Optional[str]]:
+        """Executes the visualization code and saves the result."""
         try:
-            # Create filename based on timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            html_path = f"data/visualizations/viz_{timestamp}.html"
+            filename = os.path.join(
+                self.viz_dir, 
+                f"{timestamp}.png"
+            )
             
-            # Convert data to DataFrame if it's not already
-            if isinstance(self.current_data, list):
-                df = pd.DataFrame(self.current_data)
-            else:
-                df = pd.DataFrame([self.current_data])
+            # Prepare data
+            if not hasattr(self, 'current_data') or not self.current_data:
+                return "", "No data available for visualization"
+                
+            df = (pd.DataFrame(self.current_data) 
+                  if isinstance(self.current_data, list) 
+                  else pd.DataFrame([self.current_data]))
             
-            # Prepare the execution environment
+            # Set up execution environment
             namespace = {
                 'pd': pd,
                 'px': plotly.express,
                 'go': plotly.graph_objects,
-                'data': df,  # Pass DataFrame instead of raw data
-                'html_path': html_path,
-                'np': np  # Add numpy for numerical operations
+                'data': df,
+                'df': df,
+                'np': np
             }
-            
-            # Clean up the code
-            code = code.strip()
-            
-            # Ensure DataFrame creation uses the provided data
-            if 'pd.DataFrame(data)' not in code:
-                code = f"df = pd.DataFrame(data)\n{code}"
-            
-            # Add save command if not present
-            if "fig.write_html(" not in code:
-                code += f"\nfig.write_html('{html_path}')"
-            
-            # Execute the code in the prepared namespace
+            # Execute the code
             exec(code, namespace)
-            
-            if os.path.exists(html_path):
-                # Convert HTML to base64
-                with open(html_path, "r", encoding="utf-8") as file:
-                    html_content = file.read()
-                return html_content, None
-            else:
-                return "", "Visualization file was not created"
+
+            if 'fig' not in namespace:
+                return "", "No figure was created by the visualization code"
+                
+            fig = namespace['fig']
+                
+            # Add default layout improvements
+            fig.update_layout(
+                    template='plotly_white',
+                    title_x=0.5,
+                    margin=dict(t=100, pad=10),
+                    showlegend=True
+                )
+                
+            # Save the figure
+            fig.write_image(
+                    filename, 
+                    format="png", 
+                    engine="kaleido",
+                    scale=2.0  
+                )
+                
+            return filename, None
                 
         except Exception as e:
             logger.error(f"Error running visualization code: {e}")
-            error_msg = f"Error creating visualization: {str(e)}\nCode:\n{code}"
-            return "", error_msg
+            return "", f"Error creating visualization: {str(e)}"
     
-    async def generate_visualization_description(self, query: str, data: List[Dict[str, Any]]) -> str:
+    def generate_visualization_description(self, query: str, data: List[Dict[str, Any]]) -> str:
         """
         Generates a description of the created visualization.
 
         Args:
         query: The original query in natural language
-        data: The data used for the visualization
+        data: The data used for the visualizationx&
 
         Returns:
         A natural language description of the visualization
@@ -226,9 +243,13 @@ class VisualizationAgent(BaseAgent):
         Use a professional and precise tone, appropriate for the pharmaceutical industry.
         """
         
-        response = await self._get_llm_response(prompt, system_message)
+        response = self._get_llm_response(prompt, system_message)
+        cleaned_response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
+        cleaned_response = re.sub(r'<[^>]+>', '', cleaned_response)
+        cleaned_response = re.sub(r'\s+', ' ', cleaned_response).strip()
         
-        return response
+        
+        return cleaned_response
     
     async def process_query(self, query: str, session: Session) -> Dict[str, Any]:
         """
@@ -242,43 +263,35 @@ class VisualizationAgent(BaseAgent):
             Dictionary containing the response and associated data
         """
         try:
-            # Using the inventory agent to get the data asynchronously
-            inventory_response = await self.inventory_agent.process_query(query, session)
+            inventory_response = self.inventory_agent.process_query(query, session)
             data = inventory_response.get("data", [])
             
             # Preparing the response
             response = {
                 "query": query,
                 "data": data,
-                "visualization_base64": None,  # Changed from visualization_path to visualization_base64
+                "visualization_path": None,  
                 "error": None,
                 "response": None,
                 "query_type": "visualization"  # Added query_type
             }
             
-            # If no data, return an error
             if not data:
                 response["error"] = "No data available to create a visualization."
                 response["response"] = "Sorry, I was unable to obtain data to create a visualization based on your query."
                 return response
             
-            # Generating the visualization code
-            viz_code = await self.generate_visualization_code(query, data)
+            viz_code = self.generate_visualization_code(query, data)
             logger.info(f"Visualization code generated: {viz_code[:100]}...")
-            
-            # Executing the visualization code and getting base64 image
-            viz_base64, error = await self.execute_visualization_code(viz_code, query)
+            viz_path, error = await self.execute_visualization_code(viz_code)
             
             if error:
                 response["error"] = error
                 response["response"] = f"Sorry, an error occurred while creating the visualization: {error}"
                 return response
             
-            # Adding the visualization html  data to the response
-            response["visualization__html"] = viz_base64
-            
-            # Generating the visualization description
-            description = await self.generate_visualization_description(query, data)
+            response["visualization_path"] = viz_path
+            description = self.generate_visualization_description(query, data)
             response["response"] = description
             
             return response

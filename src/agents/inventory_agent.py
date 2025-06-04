@@ -129,11 +129,15 @@ class InventoryAgent(BaseAgent):
         You are an assistant specializing in pharmaceutical inventory management.
         Your task is to generate clear and informative responses based on inventory data.
         Use a professional and precise tone, appropriate for the pharmaceutical industry.
+        dont include anything like this "Best regards, [Your Name] Pharmaceutical Inventory Specialist" , just generate the response.
         """
         
         response = self._get_llm_response(prompt, system_message)
+        cleaned_response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
+        cleaned_response = re.sub(r'<[^>]+>', '', cleaned_response)
+        cleaned_response = re.sub(r'\s+', ' ', cleaned_response).strip()
         
-        return response
+        return cleaned_response
     
     def process_query(self, query: str, session: Session) -> Dict[str, Any]:
         """

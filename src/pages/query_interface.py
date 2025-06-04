@@ -58,7 +58,17 @@ from src.agents.Prophetforecasting import ProphetForecastAgent
 logger = get_logger("query_page")
 visualization_logger = get_logger("visualization")
 
-
+        
+def test_visualization_path(path: str) -> dict:
+    """Test if a visualization file is accessible."""
+    return {
+        "path": path,
+        "exists": os.path.exists(path),
+        "is_file": os.path.isfile(path) if os.path.exists(path) else False,
+        "size": os.path.getsize(path) if os.path.exists(path) else 0,
+        "readable": os.access(path, os.R_OK) if os.path.exists(path) else False,
+        "absolute_path": os.path.abspath(path)
+    }
 def debug_visualization(viz_data: str) -> Dict:
     """
     Debug visualization data format and content.
@@ -228,7 +238,7 @@ def local_css():
         section[data-testid="stSidebar"] .stButton > button:hover {
             background: #1ed760 !important; /* Lighter Spotify green */
             transform: translateY(-2px) !important;
-            box-shadow: 0 4px 12px rgba(30, 215, 96, 0.3) !important;
+            box-shadow: 0 4px 12px rgba(0, 215, 96, 0.3) !important;
         }
 
         
@@ -285,38 +295,6 @@ def validate_visualization(viz_data: str) -> bool:
         logger.error(f"Visualization validation error: {str(e)}")
         return False
 
-
-def create_sample_visualization():
-    """Create a sample visualization for testing"""
-    try:
-        plt.figure(figsize=(10, 6))
-        plt.clf()
-        
-        # Sample data
-        x = [1, 2, 3, 4, 5]
-        y = [10, 25, 30, 45, 60]
-        
-        plt.plot(x, y, marker='o', linewidth=2, markersize=8)
-        plt.title('Sample Visualization', fontsize=16, fontweight='bold')
-        plt.xlabel('X Axis')
-        plt.ylabel('Y Axis')
-        plt.grid(True, alpha=0.3)
-        
-        # Save to base64
-        buf = BytesIO()
-        plt.savefig(buf, format='png', dpi=300, bbox_inches='tight', 
-                   facecolor='white', edgecolor='none')
-        buf.seek(0)
-        img_str = base64.b64encode(buf.getvalue()).decode('utf-8')
-        plt.close()
-        
-        return img_str
-        
-    except Exception as e:
-        logger.error(f"Error creating sample visualization: {str(e)}")
-        return None
-
-
 # Initialize environment and styling
 check_environment()
 local_css()
@@ -354,29 +332,41 @@ with st.sidebar:
     
     # Test visualization button
     if st.button("🧪 Test Visualization"):
-        sample_viz = create_sample_visualization()
-        if sample_viz:
+        # Use absolute path with proper path joining
+        sample_viz = os.path.abspath(os.path.join(
+            os.path.dirname(__file__),  # Current file's directory
+            "..", "..",                 # Go up two levels
+            "data",
+            "visualizations",
+            "20250603_091412.png"
+        ))
+        
+        # Verify file exists before attempting to display
+        if os.path.exists(sample_viz):
             test_message = {
                 "role": "assistant",
                 "response": "Here's a test visualization to verify the system is working correctly.",
-                "visualization_base64": sample_viz,
+                "visualization_path": sample_viz,
                 "timestamp": datetime.now().strftime("%H:%M")
             }
             st.session_state.messages.append(test_message)
+            logger.info(f"Test visualization path: {sample_viz}")
             st.rerun()
+        else:
+            st.error(f"❌ Test visualization file not found at: {sample_viz}")
+            logger.error(f"Test visualization file not found: {sample_viz}")
     
     # Debug section
     with st.expander("🔧 Debug Tools"):
         st.markdown("**System Status:**")
-        st.success("✅ Matplotlib configured")
-        st.success("✅ Base64 encoding ready")
+        
         
         if st.button("🔍 Analyze Last Visualization"):
             if st.session_state.messages:
                 assistant_messages = [m for m in st.session_state.messages if m["role"] == "assistant"]
                 if assistant_messages:
                     last_message = assistant_messages[-1]
-                    viz_data = last_message.get("visualization_base64")
+                    viz_data = last_message.get("visualization_path")
                     debug_info = debug_visualization(viz_data)
                     st.json(debug_info)
                     
@@ -390,6 +380,19 @@ with st.sidebar:
             else:
                 st.info("No messages in chat history")
 
+    # Test visualization path button
+    if st.button("🔍 Test Visualization Path"):
+        if st.session_state.messages:
+            last_viz = next(
+                (m.get("visualization_path") for m in reversed(st.session_state.messages) 
+                 if m.get("visualization_path")), 
+                None
+            )
+            if last_viz:
+                st.json(test_visualization_path(last_viz))
+            else:
+                st.warning("No visualization path found in messages")
+
 # Main chat area
 for message in st.session_state.messages:
     with st.chat_message(message["role"], avatar="🧑‍💼" if message["role"] == "user" else "🤖"):
@@ -402,35 +405,58 @@ for message in st.session_state.messages:
             # Assistant message content
             st.markdown(message.get("response", ""))
             
-            # Handle visualization display - FIXED
-            if message.get("visualization_base64"):
+            # Handle visualization display (both path and base64)
+            if message.get("visualization_path") or message.get("visualization_base64"):
                 try:
-                    viz_data = message["visualization_base64"]
+                    # Try visualization path first
+                    if message.get("visualization_path"):
+                        viz_path = message["visualization_path"]
+                        logger.info(f"Attempting to display visualization from path: {viz_path}")
+                        
+                        if os.path.exists(viz_path):
+                            try:
+                                with open(viz_path, 'rb') as f:
+                                    image_bytes = f.read()
+                                # Create columns for centered, smaller image
+                                col1, col2, col3 = st.columns([1, 2, 1])
+                                with col2:
+                                    st.image(
+                                        image_bytes,
+                                        caption="Visualization from file",
+                                        width=400  # Smaller width
+                                    )
+                                st.success("✅ Visualization displayed successfully from file")
+                            except Exception as e:
+                                logger.error(f"Error reading visualization file: {str(e)}")
+                                st.error(f"❌ Error reading visualization: {str(e)}")
+                        else:
+                            logger.error(f"Visualization file not found at path: {viz_path}")
+                            st.error(f"❌ File not found: {viz_path}")
                     
-                    # Handle different base64 formats
-                    if viz_data.startswith('data:image'):
-                        # Data URL format
-                        image_data = base64.b64decode(viz_data.split(',', 1)[1])
-                    else:
-                        # Direct base64
-                        image_data = base64.b64decode(viz_data)
-                    
-                    # Display the image
-                    st.image(
-                        image_data,
-                        caption="Visualization",
-                        use_column_width=True
-                    )
-                    st.success("✅ Visualization displayed successfully")
-                    
+                    # Try base64 data if available
+                    if message.get("visualization_base64"):
+                        try:
+                            viz_data = message["visualization_base64"]
+                            # Create columns for centered, smaller image
+                            col1, col2, col3 = st.columns([1, 2, 1])
+                            with col2:
+                                st.image(
+                                    BytesIO(base64.b64decode(viz_data)),
+                                    caption="Visualization from base64",
+                                    width=400  # Smaller width
+                                )
+                            st.success("✅ Visualization displayed successfully from base64")
+                        except Exception as e:
+                            logger.error(f"Error displaying base64 visualization: {str(e)}")
+                            st.error(f"❌ Error displaying base64 visualization: {str(e)}")
+                
                 except Exception as e:
-                    logger.error(f"Error displaying visualization: {str(e)}")
-                    st.error(f"❌ Error displaying visualization: {str(e)}")
-                    
-                    # Debug information
+                    logger.error(f"Error in visualization handling: {str(e)}")
+                    st.error(f"❌ Error handling visualization: {str(e)}")
                     with st.expander("🔍 Debug Info"):
-                        st.code(f"Visualization data length: {len(viz_data) if viz_data else 0}")
-                        st.code(f"First 100 chars: {viz_data[:100] if viz_data else 'None'}")
+                        st.code(f"Has visualization path: {bool(message.get('visualization_path'))}")
+                        st.code(f"Has base64 data: {bool(message.get('visualization_base64'))}")
+                        st.code(f"Full error: {str(e)}")
 
             # Display forecast data if available
             if message.get("data") and "forecast_values" in message["data"]:
@@ -443,8 +469,7 @@ for message in st.session_state.messages:
                             st.metric("Mean Forecast", f"{stats.get('mean_forecast', 0):.2f}")
                         with cols[1]:
                             st.metric("Trend", stats.get('trend_direction', 'N/A'))
-                        with cols[2]:
-                            st.metric("Confidence", f"{stats.get('confidence', 0):.1f}%")
+                        
                     
                     # Show forecast values table
                     st.subheader("Forecast Values")
@@ -495,76 +520,24 @@ async def process_query():
         if "response" not in result:
             result["response"] = "Processed successfully but no message was generated."
         
-        # Handle visualization generation - IMPROVED
-        if (result.get('query_type') == 'visualization' or 
-            (result.get('data') and 'forecast_values' in result.get('data', {}))):
-            
-            try:
-                # Create figure with proper size and DPI
-                fig, ax = plt.subplots(figsize=(12, 8))
-                plt.clf()
-                ax.clear()
-                
-                if result.get('query_type') == 'visualization':
-                    # Handle visualization data
-                    viz_data = result.get('data', {}).get('visualization_data', {})
-                    if viz_data and 'x' in viz_data and 'y' in viz_data:
-                        x = viz_data.get('x', [])
-                        y = viz_data.get('y', [])
-                        
-                        ax.plot(x, y, marker='o', linewidth=2, markersize=6)
-                        ax.set_title(viz_data.get('title', 'Visualization'), fontsize=16, fontweight='bold')
-                        ax.set_xlabel(viz_data.get('xlabel', 'X'))
-                        ax.set_ylabel(viz_data.get('ylabel', 'Y'))
-                        ax.grid(True, alpha=0.3)
-                    else:
-                        # Create sample plot if no data
-                        ax.plot([1, 2, 3, 4, 5], [10, 25, 30, 45, 60], marker='o')
-                        ax.set_title('Sample Visualization', fontsize=16, fontweight='bold')
-                        ax.grid(True, alpha=0.3)
-                
-                elif result.get('data') and 'forecast_values' in result.get('data', {}):
-                    # Handle forecast data
-                    forecast_df = pd.DataFrame(result['data']['forecast_values'])
-                    if not forecast_df.empty and 'ds' in forecast_df.columns and 'yhat' in forecast_df.columns:
-                        ax.plot(forecast_df['ds'], forecast_df['yhat'], marker='o', linewidth=2)
-                        ax.set_title('Forecast Results', fontsize=16, fontweight='bold')
-                        ax.set_xlabel('Date')
-                        ax.set_ylabel('Predicted Value')
-                        ax.grid(True, alpha=0.3)
-                        plt.xticks(rotation=45)
-                
-                # Save with high quality
-                buf = BytesIO()
-                plt.tight_layout()
-                plt.savefig(buf, format='png', dpi=300, bbox_inches='tight', 
-                           facecolor='white', edgecolor='none', pad_inches=0.2)
-                buf.seek(0)
-                
-                # Encode to base64
-                img_str = base64.b64encode(buf.getvalue()).decode('utf-8')
-                result['visualization_base64'] = img_str
-                
-                plt.close(fig)  # Important: close the figure
-                logger.info(f"Visualization created successfully, size: {len(img_str)} bytes")
-                
-            except Exception as viz_error:
-                logger.error(f"Visualization error: {str(viz_error)}")
-                result['error'] = f"Visualization error: {str(viz_error)}"
-                plt.close('all')  # Close all figures on error
         
         # Create assistant message
         assistant_message = {
             "role": "assistant",
             "response": result.get("response", "No response available"),
             "data": result.get("data", {}),
-            "visualization_base64": result.get("visualization_base64"),
+            "visualization_path": result.get("visualization_path"),  # Make sure this is coming from the agent
+            "visualization_base64": result.get("visualization_base64"),  # Add base64 support
             "query_type": result.get("query_type", "text"),
             "error": result.get("error"),
             "timestamp": datetime.now().strftime("%H:%M")
         }
         
-        logger.debug(f"Assistant message created with visualization: {bool(result.get('visualization_base64'))}")
+        # Add debug logging
+        logger.debug(f"Visualization path from result: {result.get('visualization_path')}")
+        logger.debug(f"Full assistant message: {assistant_message}")
+        
+        logger.debug(f"Assistant message created with visualization: {bool(result.get('visualization_path'))}")
         st.session_state.messages.append(assistant_message)
         st.rerun()
             
@@ -638,3 +611,4 @@ def display_forecast_results(response):
         st.subheader("Detailed Forecast")
         df = pd.DataFrame(data['forecast_values'])
         st.dataframe(df, use_container_width=True)
+

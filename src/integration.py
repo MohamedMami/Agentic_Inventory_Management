@@ -5,6 +5,7 @@ from typing import Dict, Any
 from src.agents.supervisorReAct import SupervisorReActAgent
 from src.agents.inventory_agent import InventoryAgent
 from src.agents.visualization_agent import VisualizationAgent
+from src.agents.Prophetforecasting import ProphetForecastAgent  
 import os
 import datetime
 import asyncio
@@ -21,11 +22,11 @@ class SystemIntegration:
         # Initialize and register specialized agents
         self.inventory_agent = InventoryAgent()
         self.visualization_agent = VisualizationAgent()
-        # self.forecast_agent = ForecastAgent()  # Uncomment if available
+        self.forecast_agent = ProphetForecastAgent()  
         
         self.supervisor.register_agent("inventory", self.inventory_agent)
         self.supervisor.register_agent("visualization", self.visualization_agent)
-        # self.supervisor.register_agent("forecast", self.forecast_agent)
+        self.supervisor.register_agent("forecast", self.forecast_agent)
 
     async def process_query(
         self, 

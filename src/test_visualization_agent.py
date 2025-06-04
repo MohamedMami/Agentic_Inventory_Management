@@ -14,7 +14,7 @@ async def test_viz():
     session = Session()
     
     try:
-        query = "Show me a bar chart of the sales in 2025 by category."
+        query = "Show me a bar chart of the sales in march 2025 by category."
         # Await the async process_query call
         result = await agent.process_query(query, session)
         
